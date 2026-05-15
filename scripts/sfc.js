@@ -117,6 +117,34 @@ function openFileCommander() {
   return fileCommanderApp;
 }
 
+function getFoundryGeneration() {
+  const releaseGeneration = Number(game.release?.generation ?? NaN);
+  if ( Number.isFinite(releaseGeneration) ) return releaseGeneration;
+
+  const versionGeneration = Number.parseInt(String(game.version ?? "").split(".")[0] ?? "", 10);
+  return Number.isFinite(versionGeneration) ? versionGeneration : 0;
+}
+
+function getFileDeleteOperation() {
+  const implementations = [FilePicker, FilePicker?.implementation];
+
+  for ( const implementation of implementations ) {
+    if ( typeof implementation?.delete === "function" ) {
+      return (source, target, options) => implementation.delete(source, target, options);
+    }
+
+    if ( typeof implementation?.deleteFile === "function" ) {
+      return (source, target, options) => implementation.deleteFile(source, target, options);
+    }
+  }
+
+  return null;
+}
+
+function supportsDeleteOperation() {
+  return getFoundryGeneration() < 14 && typeof getFileDeleteOperation() === "function";
+}
+
 class SFCOpenMenu extends FormApplication {
   render(force, options) {
     openFileCommander();
@@ -189,7 +217,7 @@ class SFCFileCommanderApp extends Application {
     html.on("keydown", this.#onKeyDown.bind(this));
     app.on("keydown", this.#onKeyDown.bind(this));
     html.find(".sfc-pane").on("mousedown", event => this.#onPaneMouseDown(event));
-    html.find("[data-action='view'], [data-action='copy'], [data-action='upload'], [data-action='mkdir'], [data-action='refresh'], [data-action='switch-pane']").on("click", event => this.#onToolbarAction(event));
+    html.find("[data-action='view'], [data-action='copy'], [data-action='upload'], [data-action='mkdir'], [data-action='delete'], [data-action='refresh'], [data-action='switch-pane']").on("click", event => this.#onToolbarAction(event));
     html.find(".sfc-path-row").on("submit", this.#onPathSubmit.bind(this));
     html.find("select[name='source']").on("change", event => this.#onSourceChange(event));
     html.find("select[name='bucket']").on("change", event => this.#onBucketChange(event));
@@ -204,13 +232,17 @@ class SFCFileCommanderApp extends Application {
   }
 
   #buildCommandBar() {
+    const canDelete = supportsDeleteOperation();
+
     return [
       { key: "F3", label: localize("SFC.Command.View"), action: "view" },
       { key: "F4", label: localize("SFC.Command.Edit"), disabled: true },
       { key: "F5", label: localize("SFC.Command.Copy"), action: "copy" },
       { key: "F6", label: localize("SFC.Command.Move"), disabled: true },
       { key: "F7", label: localize("SFC.Command.Mkdir"), action: "mkdir" },
-      { key: "F8", label: localize("SFC.Command.Delete"), disabled: true },
+      canDelete
+        ? { key: "F8", label: localize("SFC.Command.Delete"), action: "delete" }
+        : { key: "F8", label: localize("SFC.Command.Delete"), disabled: true },
       { key: "Tab", label: localize("SFC.Command.Switch"), action: "switch-pane" },
       { key: "Ctrl+U", label: localize("SFC.Command.Upload"), action: "upload" }
     ];
@@ -444,6 +476,7 @@ class SFCFileCommanderApp extends Application {
       if ( action === "copy" ) await this.#copySelectionToOtherPane();
       if ( action === "upload" ) await this.#uploadIntoActivePane();
       if ( action === "mkdir" ) await this.#createDirectoryInActivePane();
+      if ( action === "delete" ) await this.#deleteSelectionInActivePane();
       if ( action === "refresh" ) await this.#refreshPanes();
       if ( action === "switch-pane" ) {
         this.#switchPane();
@@ -634,6 +667,16 @@ class SFCFileCommanderApp extends Application {
       event.preventDefault();
       try {
         await this.#createDirectoryInActivePane();
+      } catch (error) {
+        this.#notifyError(error);
+      }
+      return;
+    }
+
+    if ( event.key === "F8" ) {
+      event.preventDefault();
+      try {
+        await this.#deleteSelectionInActivePane();
       } catch (error) {
         this.#notifyError(error);
       }
@@ -834,6 +877,26 @@ class SFCFileCommanderApp extends Application {
     this.render(false);
   }
 
+  async #deleteSelectionInActivePane() {
+    const side = this.#getActivePaneKey();
+    const pane = this.state.panes[side];
+    const selection = this.#getSelectedEntry(side);
+
+    if ( !selection || selection.isParent ) throw new Error(localize("SFC.Notification.NoSelection"));
+    if ( selection.type !== "file" ) throw new Error(localize("SFC.Error.DeleteFilesOnly"));
+
+    const deleteOperation = getFileDeleteOperation();
+    if ( !supportsDeleteOperation() || !deleteOperation ) throw new Error(localize("SFC.Error.DeleteUnsupported"));
+
+    const options = {};
+    if ( pane.source === "s3" && pane.bucket ) options.bucket = pane.bucket;
+
+    await deleteOperation(pane.source, selection.path, options);
+    await this.#browsePane(side, pane.path, {keepSelection: true});
+    ui.notifications?.info(localize("SFC.Notification.DeleteFinished", {name: selection.name}));
+    this.render(false);
+  }
+
   async #uploadIntoActivePane() {
     const side = this.#getActivePaneKey();
     const pane = this.state.panes[side];
@@ -957,3 +1020,33 @@ async function chooseFiles() {
     input.click();
   });
 }
+
+export const __test__ = {
+  MODULE_ID,
+  STATE_SETTING,
+  RESTORE_STATE_SETTING,
+  SHOW_SCENE_CONTROL_SETTING,
+  DEFAULT_LEFT_SOURCE_SETTING,
+  DEFAULT_RIGHT_SOURCE_SETTING,
+  WRITABLE_SOURCES,
+  HOTKEY_PRECEDENCE,
+  getFoundryGeneration,
+  getFileDeleteOperation,
+  supportsDeleteOperation,
+  openFileCommander,
+  SFCOpenMenu,
+  SFCFileCommanderApp,
+  localize,
+  storageLabel,
+  storageChoices,
+  configuredDefaultSource,
+  compareEntries,
+  baseName,
+  parentPath,
+  joinPath,
+  normalizePath,
+  decodeName,
+  fileExtension,
+  toFetchUrl,
+  chooseFiles
+};
