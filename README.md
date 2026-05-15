@@ -2,6 +2,12 @@
 
 Sephral’s File Commander is a two-pane file manager for Foundry VTT with a classic commander-style workflow. It uses Foundry’s own storage APIs so browsing, copying, uploads, and directory creation stay portable across Windows, Linux, macOS, and hosted setups.
 
+## Demo
+
+![SCBR demo](media/demo.gif)
+
+If the embedded preview is not available in your GitHub view, please check the media folder.
+
 ## Current feature set
 
 - Two-pane browser for Foundry storages such as `data`, `public`, and `s3`
