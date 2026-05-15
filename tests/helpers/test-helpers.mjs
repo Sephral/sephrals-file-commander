@@ -247,6 +247,7 @@ export function createTestEnvironment() {
     settingsValues: new Map(),
     notifications: { info: [], error: [] },
     controlRenders: [],
+    controlActivations: [],
     browseCalls: [],
     uploadCalls: [],
     createDirectoryCalls: [],
@@ -372,6 +373,14 @@ export function createTestEnvironment() {
 
   const ui = {
     controls: {
+      control: { name: "tokens" },
+      controls: {
+        tokens: { name: "tokens" }
+      },
+      activate(options) {
+        state.controlActivations.push(options);
+        this.control = { name: options.control };
+      },
       render(options) {
         state.controlRenders.push(options);
       }
@@ -522,6 +531,7 @@ export function createTestEnvironment() {
       state.settingWrites = [];
       state.notifications = { info: [], error: [] };
       state.controlRenders = [];
+      state.controlActivations = [];
       state.browseCalls = [];
       state.uploadCalls = [];
       state.createDirectoryCalls = [];
@@ -541,6 +551,8 @@ export function createTestEnvironment() {
         ["sephrals-file-commander.defaultLeftSource", "data"],
         ["sephrals-file-commander.defaultRightSource", "public"]
       ]);
+      ui.controls.control = { name: "tokens" };
+      ui.controls.controls = { tokens: { name: "tokens" } };
       game.user.isGM = true;
       game.release = { generation: 14 };
       game.data.files = {

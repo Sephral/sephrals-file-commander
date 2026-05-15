@@ -108,6 +108,18 @@
   border-radius: 0;
 }
 
+.sfc-select select option {
+  color: var(--sfc-text);
+  background: #0a1731;
+}
+
+.sfc-select select option:checked,
+.sfc-select select option:hover,
+.sfc-select select option:focus {
+  color: var(--sfc-select-text);
+  background: var(--sfc-select);
+}
+
 .sfc-path-row {
   display: grid;
   grid-template-columns: auto 1fr;

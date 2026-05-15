@@ -53,12 +53,60 @@ test("registers settings, menu, keybinding, and scene controls", async () => {
   const controls = {};
   await env.hooks.trigger("getSceneControlButtons", controls);
   assert.equal(typeof controls.fileCommander.onChange, "function");
+  assert.equal(controls.fileCommander.activeTool, "open");
   assert.equal(typeof controls.fileCommander.tools.open.onChange, "function");
 
   env.game.user.isGM = false;
   const hiddenControls = {};
   await env.hooks.trigger("getSceneControlButtons", hiddenControls);
   assert.deepEqual(hiddenControls, {});
+});
+
+test("scene control toggle closes open window and ignores false activations", async () => {
+  await env.hooks.trigger("init");
+
+  const controls = {};
+  await env.hooks.trigger("getSceneControlButtons", controls);
+  globalThis.ui.controls.controls.fileCommander = controls.fileCommander;
+
+  const originalRender = __test__.SFCFileCommanderApp.prototype.render;
+  const originalClose = __test__.SFCFileCommanderApp.prototype.close;
+  let renderCount = 0;
+  let closeCount = 0;
+  __test__.SFCFileCommanderApp.prototype.render = function(force) {
+    renderCount += 1;
+    return originalRender.call(this, force);
+  };
+  __test__.SFCFileCommanderApp.prototype.close = async function(options) {
+    closeCount += 1;
+    return originalClose.call(this, options);
+  };
+
+  try {
+    controls.fileCommander.onChange(undefined, false);
+    controls.fileCommander.tools.open.onChange(undefined, false);
+    assert.equal(renderCount, 0);
+    assert.equal(closeCount, 0);
+
+    __test__.openFileCommander();
+    assert.equal(renderCount, 1);
+    assert.equal(closeCount, 0);
+
+    globalThis.ui.controls.control = { name: "fileCommander" };
+    await __test__.toggleFileCommanderFromSceneControl();
+    assert.equal(closeCount, 1);
+    assert.deepEqual(env.state.controlActivations.at(-1), { control: __test__.DEFAULT_SCENE_CONTROL });
+
+    __test__.openFileCommander();
+    assert.equal(renderCount, 2);
+    assert.equal(closeCount, 1);
+
+    await __test__.toggleFileCommanderFromSceneControl();
+    assert.equal(closeCount, 2);
+  } finally {
+    __test__.SFCFileCommanderApp.prototype.render = originalRender;
+    __test__.SFCFileCommanderApp.prototype.close = originalClose;
+  }
 });
 
 test("open menu and singleton opening return the same application until closed", async () => {

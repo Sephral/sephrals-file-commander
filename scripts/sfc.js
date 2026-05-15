@@ -1,4 +1,5 @@
 const MODULE_ID = "sephrals-file-commander";
+const DEFAULT_SCENE_CONTROL = "tokens";
 const STATE_SETTING = "windowState";
 const RESTORE_STATE_SETTING = "restoreLastSession";
 const SHOW_SCENE_CONTROL_SETTING = "showSceneControlButton";
@@ -96,7 +97,9 @@ Hooks.on("getSceneControlButtons", controls => {
     visible: true,
     order: Object.keys(controls).length,
     activeTool: "open",
-    onChange: () => openFileCommander(),
+    onChange: (_event, active) => {
+      if ( active ) toggleFileCommanderFromSceneControl();
+    },
     tools: {
       open: {
         name: "open",
@@ -105,11 +108,58 @@ Hooks.on("getSceneControlButtons", controls => {
         order: 0,
         button: true,
         visible: true,
-        onChange: () => openFileCommander()
+        onChange: (_event, active) => {
+          if ( active ) toggleFileCommanderFromSceneControl();
+        }
       }
     }
   };
 });
+
+Hooks.on("canvasReady", () => {
+  installSceneControlClickFallback();
+});
+
+Hooks.on("renderSceneControls", () => {
+  installSceneControlClickFallback();
+});
+
+function installSceneControlClickFallback() {
+  if ( getFoundryGeneration() < 14 ) return;
+
+  const button = document.querySelector("[data-control='fileCommander']");
+  if ( !button ) return;
+  if ( button.dataset.sfcClickFallbackInstalled === "true" ) return;
+
+  button.dataset.sfcClickFallbackInstalled = "true";
+  button.addEventListener("click", event => {
+    event.preventDefault();
+    event.stopPropagation();
+    void toggleFileCommanderFromSceneControl();
+  });
+}
+
+function toggleFileCommanderFromSceneControl() {
+  if ( fileCommanderApp ) {
+    const app = fileCommanderApp;
+    scheduleSceneControlRestore();
+    return app.close({ force: true });
+  }
+
+  const app = openFileCommander();
+  scheduleSceneControlRestore();
+  return app;
+}
+
+function scheduleSceneControlRestore() {
+  if ( typeof ui?.controls?.activate !== "function" ) return;
+  if ( !ui.controls.controls?.[DEFAULT_SCENE_CONTROL] ) return;
+
+  window.setTimeout(() => {
+    if ( ui.controls.control?.name === DEFAULT_SCENE_CONTROL ) return;
+    ui.controls.activate({ control: DEFAULT_SCENE_CONTROL });
+  }, 25);
+}
 
 function openFileCommander() {
   if ( !fileCommanderApp ) fileCommanderApp = new SFCFileCommanderApp();
@@ -1023,6 +1073,7 @@ async function chooseFiles() {
 
 export const __test__ = {
   MODULE_ID,
+  DEFAULT_SCENE_CONTROL,
   STATE_SETTING,
   RESTORE_STATE_SETTING,
   SHOW_SCENE_CONTROL_SETTING,
@@ -1033,6 +1084,8 @@ export const __test__ = {
   getFoundryGeneration,
   getFileDeleteOperation,
   supportsDeleteOperation,
+  installSceneControlClickFallback,
+  toggleFileCommanderFromSceneControl,
   openFileCommander,
   SFCOpenMenu,
   SFCFileCommanderApp,
