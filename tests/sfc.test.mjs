@@ -37,10 +37,17 @@ test.after(() => {
 
 test("registers settings, menu, keybinding, and scene controls", async () => {
   await env.hooks.trigger("init");
-  assert.equal(env.state.registerCalls.length, 5);
+  assert.equal(env.state.registerCalls.length, 6);
   assert.equal(env.state.registerMenuCalls.length, 1);
   assert.equal(env.state.keybindingCalls.length, 1);
   assert.equal(env.state.keybindingCalls[0].data.onDown(), true);
+
+  const languageSetting = env.state.registerCalls.find((entry) => entry.key === __test__.UI_LANGUAGE_SETTING);
+  assert.deepEqual(languageSetting.data.choices, {
+    default: "Follow Foundry",
+    de: "Deutsch",
+    en: "English"
+  });
 
   const restoreSetting = env.state.registerCalls.find((entry) => entry.key === __test__.RESTORE_STATE_SETTING);
   await restoreSetting.data.onChange(false);
@@ -124,6 +131,56 @@ test("open menu and singleton opening return the same application until closed",
   const third = __test__.openFileCommander();
   assert.notEqual(third, first);
   await third.close({ force: true });
+});
+
+test("language helpers follow the setting and refresh the open commander", async () => {
+  await env.hooks.trigger("init");
+
+  globalThis.fetch = async (url) => {
+    const language = url.match(/\/(en|de)\.json$/)?.[1];
+    return {
+      ok: true,
+      async json() {
+        if ( language === "de" ) {
+          return {
+            "SFC.Title": "Datei-Kommandant",
+            "SFC.Settings.Menu.Label": "Kommandant öffnen"
+          };
+        }
+
+        return {
+          "SFC.Title": "File Commander",
+          "SFC.Settings.Menu.Label": "Open Commander"
+        };
+      }
+    };
+  };
+
+  assert.equal(__test__.normalizeUiLanguage("de-DE"), "de");
+  assert.equal(__test__.normalizeUiLanguage("en_US"), "en");
+  assert.equal(__test__.normalizeUiLanguage("fr"), "en");
+
+  env.game.i18n.lang = "de-DE";
+  env.state.settingsValues.set(`sephrals-file-commander.${__test__.UI_LANGUAGE_SETTING}`, "default");
+  assert.equal(__test__.getModuleLanguage(), "de");
+
+  env.state.settingsValues.set(`sephrals-file-commander.${__test__.UI_LANGUAGE_SETTING}`, "en");
+  assert.equal(__test__.getModuleLanguage(), "en");
+
+  const app = __test__.openFileCommander();
+  const baselineRenderCount = app.renderCalls.length;
+  const languageSetting = env.state.registerCalls.find((entry) => entry.key === __test__.UI_LANGUAGE_SETTING);
+
+  env.state.settingsValues.set(`sephrals-file-commander.${__test__.UI_LANGUAGE_SETTING}`, "de");
+  languageSetting.data.onChange("de");
+  await flushPromises();
+
+  assert.equal(app.options.title, "Datei-Kommandant");
+  assert.equal(__test__.localize("SFC.Settings.Menu.Label"), "Kommandant öffnen");
+  assert.equal(app.renderCalls.length, baselineRenderCount + 1);
+  assert.deepEqual(env.state.controlRenders.at(-1), { reset: true });
+
+  await app.close({ force: true });
 });
 
 test("path and labeling helpers normalize values and fall back correctly", () => {

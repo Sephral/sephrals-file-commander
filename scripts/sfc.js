@@ -3,10 +3,15 @@ const DEFAULT_SCENE_CONTROL = "tokens";
 const STATE_SETTING = "windowState";
 const RESTORE_STATE_SETTING = "restoreLastSession";
 const SHOW_SCENE_CONTROL_SETTING = "showSceneControlButton";
+const UI_LANGUAGE_SETTING = "uiLanguage";
 const DEFAULT_LEFT_SOURCE_SETTING = "defaultLeftSource";
 const DEFAULT_RIGHT_SOURCE_SETTING = "defaultRightSource";
+const SUPPORTED_UI_LANGUAGES = Object.freeze(["en", "de"]);
+const DEFAULT_UI_LANGUAGE = "en";
 const WRITABLE_SOURCES = new Set(["data", "s3"]);
 const HOTKEY_PRECEDENCE = CONST.KEYBINDING_PRECEDENCE.NORMAL;
+const MODULE_TRANSLATION_CACHE = new Map();
+let MODULE_TRANSLATION_LOAD = null;
 
 let fileCommanderApp = null;
 
@@ -16,6 +21,23 @@ Hooks.once("init", () => {
     config: false,
     type: Object,
     default: {}
+  });
+
+  game.settings.register(MODULE_ID, UI_LANGUAGE_SETTING, {
+    name: game.i18n.localize("SFC.Settings.Language.Name"),
+    hint: game.i18n.localize("SFC.Settings.Language.Hint"),
+    scope: "client",
+    config: true,
+    type: String,
+    default: "default",
+    choices: {
+      default: game.i18n.localize("SFC.Language.Default"),
+      de: game.i18n.localize("SFC.Language.De"),
+      en: game.i18n.localize("SFC.Language.En")
+    },
+    onChange: () => {
+      void ensureModuleTranslationsLoaded().then(() => refreshLocalizedUi());
+    }
   });
 
   game.settings.register(MODULE_ID, RESTORE_STATE_SETTING, {
@@ -84,6 +106,10 @@ Hooks.once("init", () => {
       return true;
     }
   });
+});
+
+Hooks.once("ready", () => {
+  void ensureModuleTranslationsLoaded();
 });
 
 Hooks.on("getSceneControlButtons", controls => {
@@ -163,6 +189,7 @@ function scheduleSceneControlRestore() {
 
 function openFileCommander() {
   if ( !fileCommanderApp ) fileCommanderApp = new SFCFileCommanderApp();
+  fileCommanderApp.options.title = localize("SFC.Title");
   fileCommanderApp.render(true);
   return fileCommanderApp;
 }
@@ -977,7 +1004,76 @@ class SFCFileCommanderApp extends Application {
 }
 
 function localize(key, data) {
+  const override = MODULE_TRANSLATION_CACHE.get(getModuleLanguage())?.[key];
+  if ( override ) return interpolateTemplate(override, data);
   return game.i18n.format(key, data ?? {});
+}
+
+function interpolateTemplate(template, data = {}) {
+  return String(template ?? "").replace(/\{([^}]+)\}/g, (_match, field) => {
+    const replacement = data[field];
+    return replacement === undefined || replacement === null ? `{${field}}` : String(replacement);
+  });
+}
+
+function getRegisteredSettingValue(settingKey, fallback) {
+  try {
+    const value = game.settings.get(MODULE_ID, settingKey);
+    return value === undefined ? fallback : value;
+  } catch (_error) {
+    return fallback;
+  }
+}
+
+function normalizeUiLanguage(value) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if ( !normalized ) return DEFAULT_UI_LANGUAGE;
+  if ( SUPPORTED_UI_LANGUAGES.includes(normalized) ) return normalized;
+
+  const baseLanguage = normalized.split(/[-_.]/)[0];
+  return SUPPORTED_UI_LANGUAGES.includes(baseLanguage) ? baseLanguage : DEFAULT_UI_LANGUAGE;
+}
+
+function getPreferredLanguage() {
+  return getRegisteredSettingValue(UI_LANGUAGE_SETTING, "default");
+}
+
+function getModuleLanguage(preferredLanguage = getPreferredLanguage()) {
+  if ( SUPPORTED_UI_LANGUAGES.includes(preferredLanguage) ) return preferredLanguage;
+  return normalizeUiLanguage(game.i18n?.lang);
+}
+
+async function loadModuleTranslations(language) {
+  const normalized = normalizeUiLanguage(language);
+  if ( MODULE_TRANSLATION_CACHE.has(normalized) ) return MODULE_TRANSLATION_CACHE.get(normalized);
+
+  const response = await fetch(`modules/${MODULE_ID}/lang/${normalized}.json`);
+  if ( !response.ok ) throw new Error(`Failed to load ${normalized} translations (${response.status})`);
+
+  const translations = await response.json();
+  MODULE_TRANSLATION_CACHE.set(normalized, translations);
+  return translations;
+}
+
+async function ensureModuleTranslationsLoaded() {
+  if ( !MODULE_TRANSLATION_LOAD ) {
+    MODULE_TRANSLATION_LOAD = Promise.all(SUPPORTED_UI_LANGUAGES.map((language) => loadModuleTranslations(language)))
+      .catch((error) => {
+        console.warn(`${MODULE_ID} |`, error);
+        return null;
+      });
+  }
+
+  return MODULE_TRANSLATION_LOAD;
+}
+
+function refreshLocalizedUi() {
+  if ( fileCommanderApp ) {
+    fileCommanderApp.options.title = localize("SFC.Title");
+    fileCommanderApp.render(true);
+  }
+
+  ui.controls?.render?.({ reset: true });
 }
 
 function storageLabel(source) {
@@ -1077,8 +1173,10 @@ export const __test__ = {
   STATE_SETTING,
   RESTORE_STATE_SETTING,
   SHOW_SCENE_CONTROL_SETTING,
+  UI_LANGUAGE_SETTING,
   DEFAULT_LEFT_SOURCE_SETTING,
   DEFAULT_RIGHT_SOURCE_SETTING,
+  SUPPORTED_UI_LANGUAGES,
   WRITABLE_SOURCES,
   HOTKEY_PRECEDENCE,
   getFoundryGeneration,
@@ -1090,6 +1188,11 @@ export const __test__ = {
   SFCOpenMenu,
   SFCFileCommanderApp,
   localize,
+  normalizeUiLanguage,
+  getPreferredLanguage,
+  getModuleLanguage,
+  ensureModuleTranslationsLoaded,
+  refreshLocalizedUi,
   storageLabel,
   storageChoices,
   configuredDefaultSource,

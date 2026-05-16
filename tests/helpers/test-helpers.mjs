@@ -331,6 +331,7 @@ export function createTestEnvironment() {
 
   const game = {
     i18n: {
+      lang: "en",
       localize(key) {
         return state.localizations.get(key) ?? key;
       },
@@ -462,6 +463,11 @@ export function createTestEnvironment() {
     ["SFC.Settings.Menu.Name", "Menu name"],
     ["SFC.Settings.Menu.Label", "Open Commander"],
     ["SFC.Settings.Menu.Hint", "Menu hint"],
+    ["SFC.Settings.Language.Name", "Language"],
+    ["SFC.Settings.Language.Hint", "Language hint"],
+    ["SFC.Language.Default", "Follow Foundry"],
+    ["SFC.Language.De", "Deutsch"],
+    ["SFC.Language.En", "English"],
     ["SFC.Title", "File Commander"],
     ["SFC.Toolbar.Copy", "Copy"],
     ["SFC.Toolbar.Upload", "Upload"],
@@ -545,6 +551,7 @@ export function createTestEnvironment() {
       state.setTimeoutCalls = [];
       state.lastPromptOptions = null;
       state.settingsValues = new Map([
+        ["sephrals-file-commander.uiLanguage", "default"],
         ["sephrals-file-commander.restoreLastSession", true],
         ["sephrals-file-commander.windowState", {}],
         ["sephrals-file-commander.showSceneControlButton", true],
@@ -555,6 +562,7 @@ export function createTestEnvironment() {
       ui.controls.controls = { tokens: { name: "tokens" } };
       game.user.isGM = true;
       game.release = { generation: 14 };
+      game.i18n.lang = "en";
       game.data.files = {
         storages: ["data", "public", "s3"],
         s3: { buckets: ["bucket-a", "bucket-b"] }
