@@ -26,9 +26,14 @@ If the embedded preview is not available in your GitHub view, please check the m
 ## Settings
 
 - `Open File Commander` opens the commander directly from module settings
+- `Language` either follows Foundry's language (including community translations of this module) or forces English or German
 - `Restore last session` remembers pane state between openings
 - `Show scene control button` toggles the left-side scene-control icon
 - `Default left source` and `Default right source` define the initial storages when no prior session is restored
+
+## The Forge
+
+On [The Forge](https://forge-vtt.com/) the commander adds your Assets Library (FilePicker source `forgevtt`) to the source list, even though Foundry itself does not list it. It is treated as writable, so browsing, copying, uploads, and new folders work there, and files you copy or upload into it are stored in your Assets Library at the path shown in the pane. A pane whose default source is `User Data` starts in the Assets Library instead. Sessions restored from an earlier visit keep their source. Outside The Forge nothing changes.
 
 ## Intentional limits of this version
 

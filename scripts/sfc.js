@@ -8,7 +8,10 @@ const DEFAULT_LEFT_SOURCE_SETTING = "defaultLeftSource";
 const DEFAULT_RIGHT_SOURCE_SETTING = "defaultRightSource";
 const SUPPORTED_UI_LANGUAGES = Object.freeze(["en", "de"]);
 const DEFAULT_UI_LANGUAGE = "en";
-const WRITABLE_SOURCES = new Set(["data", "s3"]);
+// The Forge serves the user's Assets Library through this extra FilePicker source.
+const FORGE_SOURCE = "forgevtt";
+const WRITABLE_SOURCES = new Set(["data", "s3", FORGE_SOURCE]);
+const ABSOLUTE_URL_PATTERN = /^(?:https?:)?\/\//i;
 const HOTKEY_PRECEDENCE = CONST.KEYBINDING_PRECEDENCE.NORMAL;
 const MODULE_TRANSLATION_CACHE = new Map();
 let MODULE_TRANSLATION_LOAD = null;
@@ -202,8 +205,13 @@ function getFoundryGeneration() {
   return Number.isFinite(versionGeneration) ? versionGeneration : 0;
 }
 
+// The global FilePicker is deprecated since v13. The configured implementation also covers replacements such as The Forge.
+function getFilePickerClass() {
+  return globalThis.foundry?.applications?.apps?.FilePicker?.implementation ?? globalThis.FilePicker;
+}
+
 function getFileDeleteOperation() {
-  const implementations = [FilePicker, FilePicker?.implementation];
+  const implementations = [getFilePickerClass(), globalThis.foundry?.applications?.apps?.FilePicker];
 
   for ( const implementation of implementations ) {
     if ( typeof implementation?.delete === "function" ) {
@@ -438,7 +446,7 @@ class SFCFileCommanderApp extends Application {
   }
 
   #storageOptions() {
-    return Array.from(game.data.files?.storages ?? ["data"]);
+    return availableStorages();
   }
 
   #bucketOptions() {
@@ -461,7 +469,7 @@ class SFCFileCommanderApp extends Application {
 
   async #browsePane(side, path, {keepSelection = false} = {}) {
     const pane = this.state.panes[side];
-    const target = normalizePath(path);
+    const target = normalizePath(toStoragePath(pane.source, path));
 
     try {
       if ( pane.source === "s3" && !pane.bucket ) {
@@ -469,7 +477,7 @@ class SFCFileCommanderApp extends Application {
       }
 
       const result = await this.#browseRaw(pane.source, target, pane.bucket);
-      pane.path = normalizePath(result.target ?? target);
+      pane.path = normalizePath(toStoragePath(pane.source, result.target ?? target));
       pane.entries = this.#mapEntries(pane.path, result);
       pane.directoryCount = pane.entries.filter(entry => entry.type === "directory" && !entry.isParent).length;
       pane.fileCount = pane.entries.filter(entry => entry.type === "file").length;
@@ -493,7 +501,7 @@ class SFCFileCommanderApp extends Application {
   async #browseRaw(source, target, bucket) {
     const options = {};
     if ( source === "s3" && bucket ) options.bucket = bucket;
-    return FilePicker.browse(source, target, options);
+    return getFilePickerClass().browse(source, target, options);
   }
 
   #mapEntries(currentPath, result) {
@@ -884,9 +892,10 @@ class SFCFileCommanderApp extends Application {
   async #copyEntry(entry, sourcePane, targetPane, targetDirectory) {
     if ( entry.type === "directory" ) {
       const nextDirectory = joinPath(targetDirectory, entry.name);
-      await this.#ensureDirectory(targetPane, nextDirectory);
+      // On The Forge the upload creates missing folders itself, so a failed createDirectory must not stop the copy.
+      await this.#ensureDirectory(targetPane, nextDirectory, {ignoreErrors: targetPane.source === FORGE_SOURCE});
 
-      const listing = await this.#browseRaw(sourcePane.source, entry.path, sourcePane.bucket);
+      const listing = await this.#browseRaw(sourcePane.source, toStoragePath(sourcePane.source, entry.path), sourcePane.bucket);
       const entries = this.#mapEntries(entry.path, listing).filter(child => !child.isParent);
       for ( const child of entries ) {
         await this.#copyEntry(child, sourcePane, targetPane, nextDirectory);
@@ -909,19 +918,23 @@ class SFCFileCommanderApp extends Application {
 
     const body = {};
     if ( targetPane.source === "s3" && targetPane.bucket ) body.bucket = targetPane.bucket;
-    await FilePicker.upload(targetPane.source, targetDirectory, file, body, {notify: false});
+    await getFilePickerClass().upload(targetPane.source, targetDirectory, file, body, {notify: false});
   }
 
-  async #ensureDirectory(pane, path) {
+  async #ensureDirectory(pane, path, {ignoreErrors = false} = {}) {
     if ( !this.#paneSupportsWrite(pane) ) throw new Error(localize("SFC.Error.NoWritableTarget"));
 
     const options = {};
     if ( pane.source === "s3" && pane.bucket ) options.bucket = pane.bucket;
 
     try {
-      await FilePicker.createDirectory(pane.source, path, options);
+      await getFilePickerClass().createDirectory(pane.source, path, options);
     } catch (error) {
       if ( /already exists/i.test(error.message ?? "") ) return;
+      if ( ignoreErrors ) {
+        console.warn(`${MODULE_ID} | could not create directory '${path}'`, error);
+        return;
+      }
       throw error;
     }
   }
@@ -989,7 +1002,7 @@ class SFCFileCommanderApp extends Application {
     if ( pane.source === "s3" && pane.bucket ) body.bucket = pane.bucket;
 
     for ( const file of files ) {
-      await FilePicker.upload(pane.source, pane.path, file, body, {notify: false});
+      await getFilePickerClass().upload(pane.source, pane.path, file, body, {notify: false});
     }
 
     await this.#browsePane(side, pane.path, {keepSelection: true});
@@ -1004,7 +1017,12 @@ class SFCFileCommanderApp extends Application {
 }
 
 function localize(key, data) {
-  const override = MODULE_TRANSLATION_CACHE.get(getModuleLanguage())?.[key];
+  // Only an explicitly chosen module language overrides game.i18n. "Follow Foundry" leaves every string to
+  // Foundry, which already merges the module's lang file, its English fallback and community translations.
+  const preferredLanguage = getPreferredLanguage();
+  const override = SUPPORTED_UI_LANGUAGES.includes(preferredLanguage)
+    ? MODULE_TRANSLATION_CACHE.get(getModuleLanguage(preferredLanguage))?.[key]
+    : undefined;
   if ( override ) return interpolateTemplate(override, data);
   return game.i18n.format(key, data ?? {});
 }
@@ -1081,19 +1099,55 @@ function storageLabel(source) {
 }
 
 function storageChoices() {
-  return {
+  const choices = {
     data: storageLabel("data"),
     public: storageLabel("public"),
     s3: storageLabel("s3")
   };
+  if ( !isUsingTheForge() ) return choices;
+  return { [FORGE_SOURCE]: storageLabel(FORGE_SOURCE), ...choices };
 }
 
 function configuredDefaultSource(side, availableStorage) {
   const setting = side === "right" ? DEFAULT_RIGHT_SOURCE_SETTING : DEFAULT_LEFT_SOURCE_SETTING;
   const configured = game.settings.get(MODULE_ID, setting);
-  if ( availableStorage.includes(configured) ) return configured;
-  if ( availableStorage.includes("data") ) return "data";
+  if ( availableStorage.includes(configured) ) return forgeDefaultSource(configured, availableStorage);
+  const fallback = forgeDefaultSource("data", availableStorage);
+  if ( availableStorage.includes(fallback) ) return fallback;
   return availableStorage[0] ?? "data";
+}
+
+// On The Forge the Assets Library replaces "User Data" as the default storage.
+function forgeDefaultSource(source, availableStorage) {
+  if ( source !== "data" || !isUsingTheForge() ) return source;
+  return availableStorage.includes(FORGE_SOURCE) ? FORGE_SOURCE : source;
+}
+
+function getForgeVTT() {
+  // The Forge declares ForgeVTT as a script global, which is not necessarily a property of globalThis.
+  return typeof ForgeVTT === "undefined" ? undefined : ForgeVTT;
+}
+
+function isUsingTheForge() {
+  return getForgeVTT()?.usingTheForge === true;
+}
+
+function availableStorages() {
+  const storages = Array.from(game.data.files?.storages ?? ["data"]);
+  // game.data does not list The Forge's Assets Library source, so add it while running there.
+  if ( isUsingTheForge() && !storages.includes(FORGE_SOURCE) ) storages.unshift(FORGE_SOURCE);
+  return storages;
+}
+
+// The forgevtt source expects paths relative to the Assets Library root, but lists files as absolute URLs
+// (`<ASSETS_LIBRARY_URL_PREFIX><user id>/<path>`). Turn such a URL back into its relative path; other sources keep it.
+function toStoragePath(source, path) {
+  const value = String(path ?? "");
+  if ( source !== FORGE_SOURCE ) return value;
+
+  const prefix = getForgeVTT()?.ASSETS_LIBRARY_URL_PREFIX;
+  if ( !prefix || !value.startsWith(prefix) ) return value;
+  return value.slice(prefix.length).split(/[?#]/)[0].split("/").slice(1).join("/");
 }
 
 function compareEntries(left, right) {
@@ -1101,7 +1155,10 @@ function compareEntries(left, right) {
 }
 
 function baseName(path) {
-  const normalized = String(path ?? "").replace(/\/+$/, "");
+  let normalized = String(path ?? "");
+  // Absolute URLs (S3, The Forge Assets Library) may carry a query or hash that is not part of the name.
+  if ( ABSOLUTE_URL_PATTERN.test(normalized) ) normalized = normalized.split(/[?#]/)[0];
+  normalized = normalized.replace(/\/+$/, "");
   const parts = normalized.split("/");
   return parts[parts.length - 1] ?? "";
 }
@@ -1141,7 +1198,7 @@ function fileExtension(name) {
 }
 
 function toFetchUrl(path) {
-  if ( /^(?:https?:)?\/\//i.test(path) ) return path;
+  if ( ABSOLUTE_URL_PATTERN.test(path) ) return path;
   return foundry.utils.getRoute(path);
 }
 
@@ -1177,8 +1234,10 @@ export const __test__ = {
   DEFAULT_LEFT_SOURCE_SETTING,
   DEFAULT_RIGHT_SOURCE_SETTING,
   SUPPORTED_UI_LANGUAGES,
+  FORGE_SOURCE,
   WRITABLE_SOURCES,
   HOTKEY_PRECEDENCE,
+  MODULE_TRANSLATION_CACHE,
   getFoundryGeneration,
   getFileDeleteOperation,
   supportsDeleteOperation,
@@ -1196,6 +1255,9 @@ export const __test__ = {
   storageLabel,
   storageChoices,
   configuredDefaultSource,
+  isUsingTheForge,
+  availableStorages,
+  toStoragePath,
   compareEntries,
   baseName,
   parentPath,

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -27,8 +28,21 @@ async function withoutConsoleError(callback) {
   }
 }
 
+const FORGE_PREFIX = "https://assets.forge-vtt.com/";
+const FORGE_USER_URL = `${FORGE_PREFIX}user123/`;
+
+function simulateForge() {
+  globalThis.ForgeVTT = { usingTheForge: true, ASSETS_LIBRARY_URL_PREFIX: FORGE_PREFIX };
+  globalThis.ForgeAPI = { getUserId: async () => "user123" };
+}
+
 test.beforeEach(() => {
   env.reset();
+});
+
+test.afterEach(() => {
+  delete globalThis.ForgeVTT;
+  delete globalThis.ForgeAPI;
 });
 
 test.after(() => {
@@ -181,6 +195,36 @@ test("language helpers follow the setting and refresh the open commander", async
   assert.deepEqual(env.state.controlRenders.at(-1), { reset: true });
 
   await app.close({ force: true });
+});
+
+test("follow Foundry returns game.i18n strings for other languages instead of the bundled English file", async () => {
+  const bundledEnglish = JSON.parse(await readFile(new URL(modulePath("lang/en.json")), "utf8"));
+  const cache = __test__.MODULE_TRANSLATION_CACHE;
+  const previousEnglish = cache.get("en");
+  const previousTitle = env.state.localizations.get("SFC.Title");
+  const previousSummary = env.state.localizations.get("SFC.Pane.Summary");
+  cache.set("en", bundledEnglish);
+
+  try {
+    assert.equal(typeof bundledEnglish["SFC.Title"], "string");
+    env.game.i18n.lang = "fr";
+    env.state.localizations.set("SFC.Title", "Commandant de fichiers");
+    env.state.localizations.set("SFC.Pane.Summary", "{dirs} dossiers, {files} fichiers");
+    env.state.settingsValues.set(`sephrals-file-commander.${__test__.UI_LANGUAGE_SETTING}`, "default");
+
+    assert.equal(__test__.localize("SFC.Title"), "Commandant de fichiers");
+    assert.equal(__test__.localize("SFC.Pane.Summary", { dirs: 2, files: 3 }), "2 dossiers, 3 fichiers");
+
+    // An explicit module language still overrides game.i18n with the bundled file.
+    env.state.settingsValues.set(`sephrals-file-commander.${__test__.UI_LANGUAGE_SETTING}`, "en");
+    assert.equal(__test__.localize("SFC.Title"), bundledEnglish["SFC.Title"]);
+    assert.equal(__test__.localize("SFC.Pane.Summary", { dirs: 2, files: 3 }), "2 dirs, 3 files");
+  } finally {
+    if ( previousEnglish ) cache.set("en", previousEnglish);
+    else cache.delete("en");
+    env.state.localizations.set("SFC.Title", previousTitle);
+    env.state.localizations.set("SFC.Pane.Summary", previousSummary);
+  }
 });
 
 test("path and labeling helpers normalize values and fall back correctly", () => {
@@ -595,4 +639,155 @@ test("keyboard shortcut catch branches surface errors through notifications", as
 
     assert.equal(env.state.notifications.error.length >= 6, true);
   });
+});
+
+test("storage helpers add the Assets Library and prefer it as default only on The Forge", async () => {
+  // Off The Forge nothing changes.
+  assert.equal(__test__.isUsingTheForge(), false);
+  assert.deepEqual(__test__.availableStorages(), ["data", "public", "s3"]);
+  assert.equal(__test__.FORGE_SOURCE in __test__.storageChoices(), false);
+  assert.equal(__test__.configuredDefaultSource("left", ["data", "public"]), "data");
+  assert.equal(__test__.toStoragePath("forgevtt", `${FORGE_USER_URL}maps`), `${FORGE_USER_URL}maps`);
+  globalThis.ForgeVTT = { usingTheForge: false, ASSETS_LIBRARY_URL_PREFIX: FORGE_PREFIX };
+  assert.equal(__test__.isUsingTheForge(), false);
+  assert.deepEqual(__test__.availableStorages(), ["data", "public", "s3"]);
+
+  simulateForge();
+  assert.equal(__test__.isUsingTheForge(), true);
+  const storages = __test__.availableStorages();
+  assert.deepEqual(storages, ["forgevtt", "data", "public", "s3"]);
+  assert.equal(__test__.WRITABLE_SOURCES.has("forgevtt"), true);
+  assert.equal(__test__.storageLabel("forgevtt"), "Assets Library");
+  assert.equal(__test__.storageChoices().forgevtt, "Assets Library");
+
+  // The configured "data" default becomes the Assets Library, other choices stay.
+  assert.equal(__test__.configuredDefaultSource("left", storages), "forgevtt");
+  assert.equal(__test__.configuredDefaultSource("right", storages), "public");
+  env.state.settingsValues.set(`sephrals-file-commander.${__test__.DEFAULT_LEFT_SOURCE_SETTING}`, "missing");
+  assert.equal(__test__.configuredDefaultSource("left", storages), "forgevtt");
+  assert.equal(__test__.configuredDefaultSource("left", ["data", "public"]), "data");
+
+  env.game.data.files.storages = ["forgevtt", "data"];
+  assert.deepEqual(__test__.availableStorages(), ["forgevtt", "data"]);
+
+  // Absolute Assets Library URLs map back to relative paths for the forgevtt source only.
+  assert.equal(__test__.toStoragePath("forgevtt", `${FORGE_USER_URL}maps/tokens`), "maps/tokens");
+  assert.equal(__test__.toStoragePath("forgevtt", `${FORGE_USER_URL}maps/a%20b.png?v=2`), "maps/a%20b.png");
+  assert.equal(__test__.toStoragePath("forgevtt", "maps/tokens"), "maps/tokens");
+  assert.equal(__test__.toStoragePath("data", `${FORGE_USER_URL}maps`), `${FORGE_USER_URL}maps`);
+  assert.equal(__test__.baseName(`${FORGE_USER_URL}maps/castle%20map.webp?v=2#x`), "castle%20map.webp");
+
+  // Settings registered on The Forge offer the Assets Library as default source.
+  await env.hooks.trigger("init");
+  const leftSetting = env.state.registerCalls.find((entry) => entry.key === __test__.DEFAULT_LEFT_SOURCE_SETTING);
+  assert.equal(leftSetting.data.choices.forgevtt, "Assets Library");
+  assert.equal(leftSetting.data.default, "data");
+});
+
+test("on The Forge the commander browses, copies, uploads, and creates folders in the Assets Library", async () => {
+  simulateForge();
+  setBrowseResult("forgevtt", "", { target: "", dirs: ["maps"], files: [`${FORGE_USER_URL}token%20art.png`] });
+  setBrowseResult("public", "", { target: "", dirs: [], files: [] });
+
+  const app = new __test__.SFCFileCommanderApp();
+  assert.equal(app.state.panes.left.source, "forgevtt");
+  assert.equal(app.state.panes.right.source, "public");
+
+  const data = await app.getData();
+  assert.equal(data.panes.left.storageLabel, "Assets Library");
+  assert.deepEqual(data.panes.left.sourceOptions.map((option) => option.value), ["forgevtt", "data", "public", "s3"]);
+  assert.equal(data.panes.left.sourceOptions[0].selected, true);
+  assert.equal(data.panes.left.entries[0].path, "maps");
+  const fileEntry = data.panes.left.entries.find((entry) => entry.type === "file");
+  assert.equal(fileEntry.path, `${FORGE_USER_URL}token%20art.png`);
+  assert.equal(fileEntry.name, "token art.png");
+  assert.equal(fileEntry.extension, "png");
+
+  const fetchCalls = [];
+  globalThis.fetch = async (url) => {
+    fetchCalls.push(url);
+    return { ok: true, blob: async () => new Blob(["img"], { type: "image/png" }) };
+  };
+
+  const harness = createHtmlHarness();
+  app.element = harness.root;
+  app.activateListeners(harness.root);
+
+  // Copy a file out of the Assets Library: the absolute URL is fetched as is.
+  app.state.activePane = "left";
+  app.state.panes.left.selectedPath = fileEntry.path;
+  app.state.panes.right.source = "data";
+  app.state.panes.right.path = "imported";
+  harness.controls.copyButton.trigger("click");
+  await flushPromises();
+  assert.deepEqual(fetchCalls, [fileEntry.path]);
+  assert.equal(env.state.uploadCalls.at(-1).source, "data");
+  assert.equal(env.state.uploadCalls.at(-1).target, "imported");
+  assert.equal(env.state.uploadCalls.at(-1).file.name, "token art.png");
+
+  // Copy a directory into the Assets Library: a failing createDirectory does not stop the upload.
+  const originalWarn = console.warn;
+  const warnings = [];
+  console.warn = (...args) => warnings.push(args);
+  try {
+    setBrowseResult("data", "imported/dir-a", { target: "imported/dir-a", dirs: [], files: ["imported/dir-a/child.txt"] });
+    env.state.createDirectoryErrors.set("maps/dir-a", new Error("forge refused"));
+    app.state.panes.left.path = "maps";
+    app.state.panes.right.entries = [
+      { path: "imported/dir-a", label: "[dir-a]", name: "dir-a", type: "directory", isParent: false }
+    ];
+    app.state.panes.right.selectedPath = "imported/dir-a";
+    app.state.activePane = "right";
+    harness.controls.copyButton.trigger("click");
+    await flushPromises();
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.deepEqual(env.state.createDirectoryCalls.at(-1), { source: "forgevtt", path: "maps/dir-a", options: {} });
+  assert.equal(warnings.length, 1);
+  assert.equal(env.state.uploadCalls.at(-1).source, "forgevtt");
+  assert.equal(env.state.uploadCalls.at(-1).target, "maps/dir-a");
+  assert.equal(env.state.uploadCalls.at(-1).file.name, "child.txt");
+  assert.equal(fetchCalls.at(-1), "/route/imported/dir-a/child.txt");
+
+  // Upload and new folder in the Assets Library pane.
+  app.state.activePane = "left";
+  app.state.panes.left.path = "maps";
+  harness.controls.uploadButton.trigger("click");
+  const uploadInput = env.state.createdInputs.at(-1);
+  uploadInput.files = [new File(["a"], "upload.png")];
+  uploadInput.trigger("change");
+  await flushPromises();
+  assert.equal(env.state.uploadCalls.at(-1).source, "forgevtt");
+  assert.equal(env.state.uploadCalls.at(-1).target, "maps");
+
+  env.state.promptValue = "tokens";
+  harness.controls.mkdirButton.trigger("click");
+  await flushPromises();
+  assert.deepEqual(env.state.createDirectoryCalls.at(-1), { source: "forgevtt", path: "maps/tokens", options: {} });
+
+  // An absolute Assets Library URL typed into the path field navigates to its relative folder.
+  harness.controls.leftInput.value = `${FORGE_USER_URL}maps/tokens`;
+  harness.controls.leftForm.trigger("submit");
+  await flushPromises();
+  assert.deepEqual(env.state.browseCalls.at(-1), { source: "forgevtt", target: "maps/tokens", options: {} });
+  assert.equal(app.state.panes.left.path, "maps/tokens");
+
+  assert.deepEqual(env.state.notifications.error, []);
+});
+
+test("a restored Assets Library pane falls back to the default source outside The Forge", () => {
+  env.state.settingsValues.set(`sephrals-file-commander.${__test__.STATE_SETTING}`, {
+    activePane: "left",
+    panes: { left: { source: "forgevtt", path: "maps" }, right: { source: "public", path: "" } }
+  });
+
+  const app = new __test__.SFCFileCommanderApp();
+  assert.equal(app.state.panes.left.source, "data");
+  assert.equal(app.state.panes.right.source, "public");
+
+  simulateForge();
+  const forgeApp = new __test__.SFCFileCommanderApp();
+  assert.equal(forgeApp.state.panes.left.source, "forgevtt");
+  assert.equal(forgeApp.state.panes.left.path, "maps");
 });

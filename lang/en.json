@@ -77,5 +77,6 @@
   "SFC.Error.SameTarget": "Source and target path are identical.",
   "SFC.Storage.data": "User Data",
   "SFC.Storage.public": "Public",
-  "SFC.Storage.s3": "S3"
+  "SFC.Storage.s3": "S3",
+  "SFC.Storage.forgevtt": "Assets Library"
 }

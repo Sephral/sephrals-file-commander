@@ -316,7 +316,9 @@ export function createTestEnvironment() {
     },
     async upload(source, target, file, body, options) {
       state.uploadCalls.push({ source, target, file, body, options });
-      return { path: `${target}/${file.name}` };
+      // The Forge answers forgevtt uploads with the absolute Assets Library URL.
+      const prefix = source === "forgevtt" ? (globalThis.ForgeVTT?.ASSETS_LIBRARY_URL_PREFIX ?? "") + "user123/" : "";
+      return { path: `${prefix}${target}/${file.name}` };
     },
     async createDirectory(source, path, options) {
       state.createDirectoryCalls.push({ source, path, options });
@@ -519,6 +521,7 @@ export function createTestEnvironment() {
     ["SFC.Storage.data", "User Data"],
     ["SFC.Storage.public", "Public"],
     ["SFC.Storage.s3", "S3"],
+    ["SFC.Storage.forgevtt", "Assets Library"],
     ["SFC.Controls.Title", "File Commander"],
     ["SFC.Controls.Open", "Open File Commander"]
   ]);
