@@ -2,6 +2,12 @@
 
 Sephral’s File Commander is a two-pane file manager for Foundry VTT with a classic commander-style workflow. It uses Foundry’s own storage APIs so browsing, copying, uploads, and directory creation stay portable across Windows, Linux, macOS, and hosted setups.
 
+## Foundry VTT
+
+[![Foundry VTT package](https://img.shields.io/badge/Foundry%20VTT-Package%20page-fe6a1f?logo=foundryvirtualtabletop&logoColor=white)](https://foundryvtt.com/packages/sephrals-file-commander)
+
+Install the module from the package browser in Foundry VTT or open its [package page on foundryvtt.com](https://foundryvtt.com/packages/sephrals-file-commander).
+
 ## Discord
 
 [![Join Discord](https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?logo=discord&logoColor=white)](https://discord.gg/7BjCgDYaBP)
