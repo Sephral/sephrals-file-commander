@@ -2,7 +2,7 @@
   "id": "sephrals-file-commander",
   "title": "Sephral’s File Commander",
   "description": "A file manager with two panels side by side, controlled by keyboard like the classic commanders: browse Foundry's storage, copy whole folders, upload files and create new folders.",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "compatibility": {
     "minimum": 13,
     "verified": "14.369"
