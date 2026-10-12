@@ -230,7 +230,6 @@ test("follow Foundry returns game.i18n strings for other languages instead of th
 test("path and labeling helpers normalize values and fall back correctly", () => {
   assert.equal(__test__.storageLabel("data"), "User Data");
   assert.equal(__test__.storageChoices().s3, "S3");
-  assert.equal(__test__.supportsDeleteOperation(), false);
   env.state.settingsValues.set(`sephrals-file-commander.${__test__.DEFAULT_LEFT_SOURCE_SETTING}`, "missing");
   assert.equal(__test__.configuredDefaultSource("left", ["public", "s3"]), "public");
   assert.equal(__test__.configuredDefaultSource("right", ["data"]), "data");
@@ -247,48 +246,86 @@ test("path and labeling helpers normalize values and fall back correctly", () =>
   assert.equal(__test__.toFetchUrl("folder/file.txt"), "/route/folder/file.txt");
 });
 
-test("delete command is enabled on v13 and deletes selected files", async () => {
-  env.game.release = { generation: 13 };
-  setBrowseResult("data", "", { target: "", dirs: [], files: ["source.txt", "other.txt"] });
+test("F8 stays a disabled placeholder on v13 and v14 and the commander never deletes files", async () => {
+  for ( const generation of [13, 14] ) {
+    env.reset();
+    env.game.release = { generation };
+    setBrowseResult("data", "", { target: "", dirs: [], files: ["source.txt"] });
 
-  const app = new __test__.SFCFileCommanderApp();
+    const app = new __test__.SFCFileCommanderApp();
+    const data = await app.getData();
+    const deleteCommand = data.commandBar.find((entry) => entry.key === "F8");
+    assert.equal(deleteCommand?.disabled, true);
+    assert.equal(deleteCommand?.action, undefined);
+
+    const harness = createHtmlHarness();
+    app.element = harness.root;
+    app.activateListeners(harness.root);
+    app.state.activePane = "left";
+    app.state.panes.left.selectedPath = "source.txt";
+    const event = harness.controls.app.trigger("keydown", { key: "F8" });
+    await flushPromises();
+    assert.equal(event.defaultPrevented, undefined);
+    assert.deepEqual(env.state.deleteCalls, []);
+  }
+});
+
+test("opening needs the browse permission and write commands need the upload permission", async () => {
+  await env.hooks.trigger("init");
+
+  env.state.permissions.FILES_BROWSE = false;
+  assert.equal(__test__.canBrowseFiles(), false);
+  assert.equal(__test__.openFileCommander(), null);
+  assert.equal(env.state.notifications.warn.at(-1), "no browse permission");
+  assert.equal(env.state.keybindingCalls[0].data.onDown(), true);
+  assert.equal(env.state.notifications.warn.length, 2);
+  const menu = new __test__.SFCOpenMenu();
+  assert.equal(menu.render(), menu);
+  assert.equal(env.state.notifications.warn.length, 3);
+
+  env.state.permissions.FILES_BROWSE = true;
+  env.state.permissions.FILES_UPLOAD = false;
+  assert.equal(__test__.canUploadFiles(), false);
+  setBrowseResult("data", "", { target: "", dirs: [], files: ["source.txt"] });
+
+  const app = __test__.openFileCommander();
+  assert.notEqual(app, null);
   const data = await app.getData();
-  assert.equal(data.commandBar.find((entry) => entry.key === "F8")?.action, "delete");
-  assert.equal(__test__.supportsDeleteOperation(), true);
-
-  app.state.activePane = "left";
-  app.state.panes.left.source = "data";
-  app.state.panes.left.path = "";
-  app.state.panes.left.entries = [
-    { path: "source.txt", label: "source.txt", name: "source.txt", type: "file", isParent: false },
-    { path: "other.txt", label: "other.txt", name: "other.txt", type: "file", isParent: false }
-  ];
-  app.state.panes.left.selectedPath = "source.txt";
+  const command = (key) => data.commandBar.find((entry) => entry.key === key);
+  for ( const key of ["F5", "F7", "Ctrl+U"] ) {
+    assert.equal(command(key).disabled, true, key);
+    assert.equal(command(key).action, undefined, key);
+  }
+  assert.equal(command("F3").action, "view");
+  assert.equal(command("Tab").action, "switch-pane");
+  assert.equal(command("Ctrl+C").action, "copy-path");
 
   const harness = createHtmlHarness();
   app.element = harness.root;
   app.activateListeners(harness.root);
+  app.state.activePane = "left";
+  app.state.panes.left.selectedPath = "source.txt";
+  app.state.panes.right.source = "data";
+  app.state.panes.right.path = "target";
+  env.state.promptValue = "blocked-folder";
 
-  harness.controls.deleteButton.trigger("click");
+  harness.controls.app.trigger("keydown", { key: "F5" });
+  harness.controls.app.trigger("keydown", { key: "F7" });
+  harness.controls.app.trigger("keydown", { key: "u", ctrlKey: true });
   await flushPromises();
-  assert.deepEqual(env.state.deleteCalls.at(-1), { source: "data", target: "source.txt", options: {} });
-  assert.equal(env.state.notifications.info.at(-1), "deleted source.txt");
 
-  harness.controls.app.trigger("keydown", { key: "F8" });
-  await flushPromises();
-  assert.equal(env.state.deleteCalls.length, 2);
-});
+  assert.deepEqual(env.state.notifications.warn.slice(-3), ["no upload permission", "no upload permission", "no upload permission"]);
+  assert.deepEqual(env.state.uploadCalls, []);
+  assert.deepEqual(env.state.createDirectoryCalls, []);
+  assert.equal(env.state.createdInputs.length, 0);
+  assert.deepEqual(env.state.notifications.error, []);
 
-test("delete command stays disabled on v14", async () => {
-  setBrowseResult("data", "", { target: "", dirs: [], files: ["source.txt"] });
-
-  const app = new __test__.SFCFileCommanderApp();
-  const data = await app.getData();
-  const deleteCommand = data.commandBar.find((entry) => entry.key === "F8");
-
-  assert.equal(deleteCommand?.disabled, true);
-  assert.equal(deleteCommand?.action, undefined);
-  assert.equal(__test__.supportsDeleteOperation(), false);
+  // With the permission the full command bar comes back.
+  env.state.permissions.FILES_UPLOAD = true;
+  const allowed = await app.getData();
+  assert.equal(allowed.commandBar.find((entry) => entry.key === "F5").action, "copy");
+  assert.equal(allowed.commandBar.length, 9);
+  await app.close({ force: true });
 });
 
 test("chooseFiles resolves on change or on window refocus", async () => {
@@ -790,4 +827,358 @@ test("a restored Assets Library pane falls back to the default source outside Th
   const forgeApp = new __test__.SFCFileCommanderApp();
   assert.equal(forgeApp.state.panes.left.source, "forgevtt");
   assert.equal(forgeApp.state.panes.left.path, "maps");
+});
+
+const fileEntry = (path) => {
+  const name = __test__.decodeName(__test__.baseName(path));
+  return { path, label: name, name, extension: __test__.fileExtension(name), type: "file", isParent: false };
+};
+
+async function createWiredApp({ left = [], right = [] } = {}) {
+  setBrowseResult("data", "", { target: "", dirs: [], files: [] });
+  setBrowseResult("public", "", { target: "", dirs: [], files: [] });
+  const app = new __test__.SFCFileCommanderApp();
+  await app.getData();
+  const harness = createHtmlHarness();
+  app.element = harness.root;
+  app.activateListeners(harness.root);
+  app.state.activePane = "left";
+  app.state.panes.left.entries = left;
+  app.state.panes.left.selectedPath = left[0]?.path ?? "";
+  app.state.panes.right.entries = right;
+  app.state.panes.right.selectedPath = right[0]?.path ?? "";
+  return { app, harness };
+}
+
+test("keyboard selection updates rows in place, scrolls into view, and saves the state once after a pause", async () => {
+  const { app, harness } = await createWiredApp({
+    left: [fileEntry("a.txt"), fileEntry("b.txt"), fileEntry("c.txt")],
+    right: [fileEntry("right.txt")]
+  });
+  const { leftEntry, rightEntry, leftPane, rightPane, statusLine } = harness.controls;
+  leftEntry.dataset.path = "b.txt";
+  rightEntry.dataset.path = "right.txt";
+  const renders = app.renderCalls.length;
+  const writes = env.state.settingWrites.length;
+  assert.deepEqual(env.state.debounceDelays, [__test__.STATE_SAVE_DELAY]);
+
+  const down = harness.controls.app.trigger("keydown", { key: "ArrowDown" });
+  assert.equal(down.defaultPrevented, true);
+  assert.equal(down.propagationStopped, true);
+  assert.equal(app.state.panes.left.selectedPath, "b.txt");
+  assert.equal(leftEntry.hasClass("is-selected"), true);
+  assert.deepEqual(leftEntry.scrollCalls, [{ block: "nearest" }]);
+  assert.equal(statusLine.textContent, "Selection: b.txt");
+  assert.equal(statusLine.attributes.title, "Selection: b.txt");
+
+  harness.controls.app.trigger("keydown", { key: "ArrowDown" });
+  assert.equal(app.state.panes.left.selectedPath, "c.txt");
+  assert.equal(leftEntry.hasClass("is-selected"), false);
+  harness.controls.app.trigger("keydown", { key: "Home" });
+  assert.equal(app.state.panes.left.selectedPath, "a.txt");
+  harness.controls.app.trigger("keydown", { key: "End" });
+  assert.equal(app.state.panes.left.selectedPath, "c.txt");
+  harness.controls.app.trigger("keydown", { key: "ArrowUp" });
+  assert.equal(app.state.panes.left.selectedPath, "b.txt");
+
+  // Tab only moves the active pane marker.
+  harness.controls.app.trigger("keydown", { key: "Tab" });
+  assert.equal(app.state.activePane, "right");
+  assert.equal(rightPane.hasClass("is-active"), true);
+  assert.equal(leftPane.hasClass("is-active"), false);
+  assert.equal(rightEntry.hasClass("is-selected"), true);
+  assert.equal(statusLine.textContent, "Selection: right.txt");
+
+  // Clicking a row works the same way.
+  harness.controls.leftEntry.trigger("click");
+  assert.equal(app.state.activePane, "left");
+  assert.equal(statusLine.textContent, "Selection: b.txt");
+
+  await flushPromises();
+  assert.equal(app.renderCalls.length, renders);
+  assert.equal(env.state.settingWrites.length, writes);
+
+  env.flushDebounced();
+  await flushPromises();
+  assert.equal(env.state.settingWrites.length, writes + 1);
+  assert.equal(env.state.settingWrites.at(-1).value.panes.left.selectedPath, "b.txt");
+  assert.equal(env.state.settingWrites.at(-1).value.activePane, "left");
+
+  // Closing drops a pending save and writes the state directly.
+  harness.controls.app.trigger("keydown", { key: "ArrowDown" });
+  assert.equal(env.state.pendingDebounced.size, 1);
+  await app.close({ force: true });
+  assert.equal(env.state.pendingDebounced.size, 0);
+  assert.equal(env.state.settingWrites.at(-1).value.panes.left.selectedPath, "c.txt");
+});
+
+test("a render scrolls the selected rows back into view and shows the selection in the status line", async () => {
+  setBrowseResult("data", "", { target: "", dirs: ["folder-a"], files: ["file-a.txt"] });
+  const app = new __test__.SFCFileCommanderApp();
+  const data = await app.getData();
+  assert.equal(data.status, "Selection: folder-a");
+
+  app.state.panes.left.selectedPath = "";
+  assert.equal((await app.getData()).status, "Selection: none");
+
+  const harness = createHtmlHarness();
+  harness.controls.leftEntry.addClass("is-selected");
+  app.activateListeners(harness.root);
+  assert.deepEqual(harness.controls.leftEntry.scrollCalls, [{ block: "nearest" }]);
+  assert.deepEqual(harness.controls.rightEntry.scrollCalls, []);
+});
+
+test("Ctrl+C copies the selected path in the form Foundry's FilePicker returns", async () => {
+  await withoutConsoleError(async () => {
+    const { app, harness } = await createWiredApp({
+      left: [
+        { path: "worlds", label: "[..]", name: "..", type: "directory", isParent: true },
+        fileEntry("worlds/test/map%20a.png"),
+        { path: "worlds/test/tokens", label: "[tokens]", name: "tokens", type: "directory", isParent: false }
+      ]
+    });
+
+    app.state.panes.left.selectedPath = "worlds/test/map%20a.png";
+    const event = harness.controls.app.trigger("keydown", { key: "c", ctrlKey: true });
+    await flushPromises();
+    assert.equal(event.propagationStopped, true);
+    assert.deepEqual(env.state.clipboardWrites, ["worlds/test/map%20a.png"]);
+    assert.equal(env.state.notifications.info.at(-1), "path copied worlds/test/map%20a.png");
+
+    app.state.panes.left.selectedPath = "worlds/test/tokens";
+    harness.controls.copyPathButton.trigger("click");
+    await flushPromises();
+    assert.equal(env.state.clipboardWrites.at(-1), "worlds/test/tokens");
+
+    // S3 and The Forge list full URLs, which is also what their FilePicker returns.
+    app.state.panes.left.entries.push(fileEntry(`${FORGE_USER_URL}maps/castle.webp`));
+    app.state.panes.left.selectedPath = `${FORGE_USER_URL}maps/castle.webp`;
+    harness.controls.app.trigger("keydown", { key: "C", ctrlKey: true });
+    await flushPromises();
+    assert.equal(env.state.clipboardWrites.at(-1), `${FORGE_USER_URL}maps/castle.webp`);
+
+    app.state.panes.left.selectedPath = "worlds";
+    harness.controls.app.trigger("keydown", { key: "c", ctrlKey: true });
+    await flushPromises();
+    assert.equal(env.state.clipboardWrites.length, 3);
+    assert.equal(env.state.notifications.error.at(-1), "error no selection");
+
+    // A plain "c" is not a shortcut.
+    const plain = harness.controls.app.trigger("keydown", { key: "c" });
+    assert.equal(plain.defaultPrevented, undefined);
+  });
+});
+
+test("copyTextToClipboard falls back to navigator.clipboard without game.clipboard", async () => {
+  await __test__.copyTextToClipboard("via-game");
+  assert.deepEqual(env.state.clipboardWrites, ["via-game"]);
+
+  const writes = [];
+  const originalClipboard = env.game.clipboard;
+  const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  env.game.clipboard = undefined;
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: { clipboard: { writeText: async (text) => writes.push(text) } }
+  });
+  try {
+    await __test__.copyTextToClipboard("via-navigator");
+  } finally {
+    env.game.clipboard = originalClipboard;
+    if ( originalNavigator ) Object.defineProperty(globalThis, "navigator", originalNavigator);
+    else delete globalThis.navigator;
+  }
+  assert.deepEqual(writes, ["via-navigator"]);
+});
+
+test("mediaKind follows Foundry's extension tables", () => {
+  assert.equal(__test__.mediaKind("hero.PNG"), "image");
+  assert.equal(__test__.mediaKind("icons/svg/d20.svg"), "image");
+  assert.equal(__test__.mediaKind("intro.mp4"), "video");
+  assert.equal(__test__.mediaKind("loop.webm"), "video");
+  assert.equal(__test__.mediaKind("theme.mp3"), "audio");
+  assert.equal(__test__.mediaKind("notes.txt"), "");
+  assert.equal(__test__.mediaKind("noext"), "");
+  assert.equal(__test__.mediaKind("x.constructor"), "");
+  assert.equal(__test__.mediaKind(undefined), "");
+});
+
+test("F3 and Enter show images and videos in ImagePopout, play audio in a dialog, and open other files in a tab", async () => {
+  const { app, harness } = await createWiredApp({
+    left: [
+      fileEntry("art/hero.png"),
+      fileEntry("art/intro.webm"),
+      fileEntry("sounds/a%20b.mp3"),
+      fileEntry("sounds/theme.ogg"),
+      fileEntry("docs/notes.txt")
+    ]
+  });
+  const select = (path) => {
+    app.state.panes.left.selectedPath = path;
+  };
+
+  select("art/hero.png");
+  harness.controls.app.trigger("keydown", { key: "F3" });
+  await flushPromises();
+  assert.equal(env.state.imagePopouts.length, 1);
+  assert.deepEqual(env.state.imagePopouts[0].options, { src: "/route/art/hero.png", window: { title: "hero.png" } });
+  assert.deepEqual(env.state.imagePopouts[0].renderOptions, { force: true });
+
+  select("art/intro.webm");
+  harness.controls.app.trigger("keydown", { key: "Enter" });
+  await flushPromises();
+  assert.equal(env.state.imagePopouts.at(-1).options.src, "/route/art/intro.webm");
+
+  select("sounds/a%20b.mp3");
+  harness.controls.app.trigger("keydown", { key: "F3" });
+  await flushPromises();
+  const firstAudio = env.state.dialogCalls.at(-1);
+  assert.equal(firstAudio.type, "prompt");
+  assert.equal(firstAudio.config.window.title, "a b.mp3");
+  assert.equal(firstAudio.config.content, `<audio controls autoplay src="/route/sounds/a%20b.mp3"></audio>`);
+  assert.equal(firstAudio.config.ok.label, "Close");
+
+  // A second audio file replaces the first player.
+  select("sounds/theme.ogg");
+  harness.controls.leftEntry.dataset.path = "sounds/theme.ogg";
+  harness.controls.leftEntry.trigger("dblclick");
+  await flushPromises();
+  assert.equal(env.state.dialogCalls.length, 2);
+  assert.equal(env.state.dialogCalls.at(-1).config.content.includes("/route/sounds/theme.ogg"), true);
+
+  select("docs/notes.txt");
+  harness.controls.viewButton.trigger("click");
+  await flushPromises();
+  assert.deepEqual(env.state.windowOpenCalls, [{ url: "/route/docs/notes.txt", target: "_blank", features: "noopener" }]);
+  assert.equal(env.state.imagePopouts.length, 2);
+  assert.deepEqual(env.state.notifications.error, []);
+});
+
+test("overwrite helpers read listings case-insensitively and remember apply-to-all answers", async () => {
+  const names = __test__.listingFileNames({ files: ["maps/Castle%20Map.webp", `${FORGE_USER_URL}maps/token.png?v=2`] });
+  assert.deepEqual(Array.from(names), ["castle map.webp", "token.png"]);
+  assert.deepEqual(Array.from(__test__.listingFileNames(undefined)), []);
+
+  const run = __test__.createTransferRun(true);
+  assert.equal(__test__.applyOverwriteAnswer(run, { action: "skip", all: false }), "skip");
+  assert.equal(run.mode, "ask");
+  assert.equal(__test__.applyOverwriteAnswer(run, { action: "overwrite", all: true }), "overwrite");
+  assert.equal(run.mode, "overwrite");
+  assert.equal(run.cancelled, false);
+  assert.equal(__test__.applyOverwriteAnswer(run, "cancel"), "cancel");
+  assert.equal(run.cancelled, true);
+  const dismissed = __test__.createTransferRun(false);
+  assert.equal(__test__.applyOverwriteAnswer(dismissed, null), "cancel");
+  assert.equal(dismissed.cancelled, true);
+
+  // The dialog offers skip and "apply to all" only when more files follow.
+  env.state.dialogAnswers.push((config) => config);
+  const single = await __test__.askOverwrite("<b>.png", "maps", false);
+  assert.deepEqual(single.buttons.map((button) => button.action), ["overwrite", "cancel"]);
+  assert.equal(single.buttons.find((button) => button.default).action, "cancel");
+  assert.equal(single.content, "<p>&lt;b&gt;.png exists in maps</p>");
+
+  env.state.dialogAnswers.push((config) => config);
+  const multiple = await __test__.askOverwrite("a.png", "", true);
+  assert.deepEqual(multiple.buttons.map((button) => button.action), ["overwrite", "skip", "cancel"]);
+  assert.equal(multiple.buttons.find((button) => button.default).action, "skip");
+  assert.match(multiple.content, /a\.png exists in \//);
+  assert.match(multiple.content, /name="applyAll"/);
+  const form = (checked) => ({ form: { elements: { applyAll: { checked } } } });
+  assert.deepEqual(multiple.buttons[0].callback(null, form(true)), { action: "overwrite", all: true });
+  assert.deepEqual(multiple.buttons[1].callback(null, form(false)), { action: "skip", all: false });
+  assert.equal(multiple.rejectClose, false);
+});
+
+test("F5 asks before overwriting a file and skips, overwrites, or cancels as answered", async () => {
+  const { app, harness } = await createWiredApp({ left: [fileEntry("source.txt")] });
+  app.state.panes.right.source = "data";
+  app.state.panes.right.path = "target";
+  setBrowseResult("data", "target", { target: "target", dirs: [], files: ["target/Source.txt"] });
+
+  env.state.dialogAnswers.push("cancel");
+  harness.controls.app.trigger("keydown", { key: "F5" });
+  await flushPromises();
+  assert.equal(env.state.dialogCalls.length, 1);
+  assert.deepEqual(env.state.uploadCalls, []);
+  assert.equal(env.state.notifications.info.at(-1), "copy cancelled source.txt");
+
+  env.state.dialogAnswers.push({ action: "overwrite", all: false });
+  harness.controls.copyButton.trigger("click");
+  await flushPromises();
+  assert.equal(env.state.uploadCalls.length, 1);
+  assert.equal(env.state.uploadCalls[0].target, "target");
+  assert.equal(env.state.notifications.info.at(-1), "copy finished source.txt");
+
+  // Without a name clash there is no question.
+  setBrowseResult("data", "target", { target: "target", dirs: [], files: ["target/other.txt"] });
+  harness.controls.copyButton.trigger("click");
+  await flushPromises();
+  assert.equal(env.state.dialogCalls.length, 2);
+  assert.equal(env.state.uploadCalls.length, 2);
+  assert.deepEqual(env.state.notifications.error, []);
+});
+
+test("directory copies ask once per clash and honor skip all, overwrite all, and cancel", async () => {
+  const children = ["dir-a/a.txt", "dir-a/b.txt", "dir-a/c.txt"];
+  const { app, harness } = await createWiredApp({
+    left: [{ path: "dir-a", label: "[dir-a]", name: "dir-a", type: "directory", isParent: false }]
+  });
+  app.state.panes.right.source = "data";
+  app.state.panes.right.path = "target";
+  setBrowseResult("data", "dir-a", { target: "dir-a", dirs: [], files: children });
+  setBrowseResult("data", "target/dir-a", { target: "target/dir-a", dirs: [], files: ["target/dir-a/A.TXT", "target/dir-a/b.txt"] });
+
+  env.state.dialogAnswers.push({ action: "skip", all: true });
+  harness.controls.copyButton.trigger("click");
+  await flushPromises();
+  assert.equal(env.state.dialogCalls.length, 1);
+  assert.match(env.state.dialogCalls[0].config.content, /a\.txt exists in target\/dir-a/);
+  assert.deepEqual(env.state.uploadCalls.map((call) => call.file.name), ["c.txt"]);
+  assert.equal(env.state.notifications.info.includes("skipped 2"), true);
+
+  env.state.uploadCalls = [];
+  env.state.dialogAnswers.push({ action: "overwrite", all: true });
+  harness.controls.copyButton.trigger("click");
+  await flushPromises();
+  assert.equal(env.state.dialogCalls.length, 2);
+  assert.deepEqual(env.state.uploadCalls.map((call) => call.file.name), ["a.txt", "b.txt", "c.txt"]);
+
+  // One overwrite without "all" asks again for the next clash, a dismissed dialog stops the copy.
+  env.state.uploadCalls = [];
+  env.state.dialogAnswers.push({ action: "overwrite", all: false }, null);
+  harness.controls.copyButton.trigger("click");
+  await flushPromises();
+  assert.equal(env.state.dialogCalls.length, 4);
+  assert.deepEqual(env.state.uploadCalls.map((call) => call.file.name), ["a.txt"]);
+  assert.equal(env.state.notifications.info.at(-1), "copy cancelled [dir-a]");
+  assert.deepEqual(env.state.notifications.error, []);
+});
+
+test("uploads ask before overwriting and report only the files written", async () => {
+  const { app, harness } = await createWiredApp({ left: [fileEntry("existing.txt")] });
+  app.state.panes.left.path = "uploads";
+  setBrowseResult("data", "uploads", { target: "uploads", dirs: [], files: ["uploads/existing.txt"] });
+
+  env.state.dialogAnswers.push({ action: "skip", all: false });
+  harness.controls.uploadButton.trigger("click");
+  const input = env.state.createdInputs.at(-1);
+  input.files = [new File(["a"], "existing.txt"), new File(["b"], "new.txt")];
+  input.trigger("change");
+  await flushPromises();
+  assert.equal(env.state.dialogCalls.length, 1);
+  assert.deepEqual(env.state.uploadCalls.map((call) => call.file.name), ["new.txt"]);
+  assert.equal(env.state.notifications.info.includes("upload finished 1"), true);
+  assert.equal(env.state.notifications.info.at(-1), "skipped 1");
+
+  env.state.uploadCalls = [];
+  env.state.dialogAnswers.push("cancel");
+  harness.controls.app.trigger("keydown", { key: "u", ctrlKey: true });
+  const secondInput = env.state.createdInputs.at(-1);
+  secondInput.files = [new File(["a"], "existing.txt"), new File(["b"], "later.txt")];
+  secondInput.trigger("change");
+  await flushPromises();
+  assert.deepEqual(env.state.uploadCalls, []);
+  assert.equal(env.state.notifications.info.at(-1), "upload cancelled 0");
+  assert.deepEqual(env.state.notifications.error, []);
 });

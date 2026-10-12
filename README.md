@@ -25,9 +25,17 @@ If the embedded preview is not available in your GitHub view, please check the m
 - Two-pane browser for Foundry storages such as `data`, `public`, and `s3`
 - Commander-style keyboard navigation with arrow keys, `Enter`, `Tab`, `Backspace`, and `F3`
 - Recursive copy from one pane to the other
+- Asks before a copy or upload overwrites an existing file. With several files you can apply the answer to all remaining files
 - Directory creation in writable storages
 - Local upload into the active pane
+- Images and videos open in Foundry's image viewer, audio files play in a small player
+- `Ctrl+C` copies the path of the selected entry in the form Foundry's file picker uses: a relative path for User Data and Public, the full URL for S3 and The Forge. Paste it into token images, tiles, or playlist sounds
+- A status line shows the path of the selected entry
 - Direct access from Foundry settings and a scene-control icon on the left side
+
+## Permissions
+
+Opening the commander needs the Foundry permission to browse files. Copy, upload, and new folders also need the permission to upload files. Without it these commands are shown disabled.
 
 ## Settings
 
@@ -48,11 +56,13 @@ Foundry core exposes browse, upload, and directory creation APIs, but it does no
 ## Hotkeys inside the commander
 
 - `ArrowUp` / `ArrowDown` move the selection
+- `Home` / `End` jump to the first or last entry
 - `ArrowLeft` or `Backspace` go to the parent directory
 - `ArrowRight` or `Enter` open the selected directory or file
-- `F3` views the selected entry
+- `F3` views the selected entry: images and videos in Foundry's image viewer, audio in a small player, other files in a new browser tab
 - `Tab` switches the active pane
 - `Ctrl+R` refreshes both panes
+- `Ctrl+C` copies the path of the selected entry
 - `F5` copies the selected entry to the opposite pane
 - `F7` creates a directory in the active pane
 - `Ctrl+U` uploads files into the active pane

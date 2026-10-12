@@ -13,6 +13,8 @@ const FORGE_SOURCE = "forgevtt";
 const WRITABLE_SOURCES = new Set(["data", "s3", FORGE_SOURCE]);
 const ABSOLUTE_URL_PATTERN = /^(?:https?:)?\/\//i;
 const HOTKEY_PRECEDENCE = CONST.KEYBINDING_PRECEDENCE.NORMAL;
+// Selection changes save the window state only after the key presses settle.
+const STATE_SAVE_DELAY = 300;
 const MODULE_TRANSLATION_CACHE = new Map();
 let MODULE_TRANSLATION_LOAD = null;
 
@@ -191,6 +193,12 @@ function scheduleSceneControlRestore() {
 }
 
 function openFileCommander() {
+  // The server refuses every browse request without this permission, so the commander would only show errors.
+  if ( !canBrowseFiles() ) {
+    ui.notifications?.warn(localize("SFC.Error.NoBrowsePermission"));
+    return null;
+  }
+
   if ( !fileCommanderApp ) fileCommanderApp = new SFCFileCommanderApp();
   fileCommanderApp.options.title = localize("SFC.Title");
   fileCommanderApp.render(true);
@@ -210,24 +218,13 @@ function getFilePickerClass() {
   return globalThis.foundry?.applications?.apps?.FilePicker?.implementation ?? globalThis.FilePicker;
 }
 
-function getFileDeleteOperation() {
-  const implementations = [getFilePickerClass(), globalThis.foundry?.applications?.apps?.FilePicker];
-
-  for ( const implementation of implementations ) {
-    if ( typeof implementation?.delete === "function" ) {
-      return (source, target, options) => implementation.delete(source, target, options);
-    }
-
-    if ( typeof implementation?.deleteFile === "function" ) {
-      return (source, target, options) => implementation.deleteFile(source, target, options);
-    }
-  }
-
-  return null;
+function canBrowseFiles() {
+  return game.user?.can("FILES_BROWSE") === true;
 }
 
-function supportsDeleteOperation() {
-  return getFoundryGeneration() < 14 && typeof getFileDeleteOperation() === "function";
+// Uploads, copies and new folders all write through the upload route or createDirectory.
+function canUploadFiles() {
+  return game.user?.can("FILES_UPLOAD") === true;
 }
 
 class SFCOpenMenu extends FormApplication {
@@ -240,6 +237,10 @@ class SFCOpenMenu extends FormApplication {
 }
 
 class SFCFileCommanderApp extends Application {
+  #queueStateSave = foundry.utils.debounce(() => void this.#saveState(), STATE_SAVE_DELAY);
+
+  #audioPreview = null;
+
   constructor(options = {}) {
     super(options);
     this.state = this.#loadState();
@@ -281,6 +282,7 @@ class SFCFileCommanderApp extends Application {
         empty: localize("SFC.Pane.Empty")
       },
       commandBar: this.#buildCommandBar(),
+      status: this.#statusText(),
       panes: {
         left: this.#serializePane("left"),
         right: this.#serializePane("right")
@@ -302,35 +304,48 @@ class SFCFileCommanderApp extends Application {
     html.on("keydown", this.#onKeyDown.bind(this));
     app.on("keydown", this.#onKeyDown.bind(this));
     html.find(".sfc-pane").on("mousedown", event => this.#onPaneMouseDown(event));
-    html.find("[data-action='view'], [data-action='copy'], [data-action='upload'], [data-action='mkdir'], [data-action='delete'], [data-action='refresh'], [data-action='switch-pane']").on("click", event => this.#onToolbarAction(event));
+    html.find("[data-action='view'], [data-action='copy'], [data-action='upload'], [data-action='mkdir'], [data-action='refresh'], [data-action='switch-pane'], [data-action='copy-path']").on("click", event => this.#onToolbarAction(event));
     html.find(".sfc-path-row").on("submit", this.#onPathSubmit.bind(this));
     html.find("select[name='source']").on("change", event => this.#onSourceChange(event));
     html.find("select[name='bucket']").on("change", event => this.#onBucketChange(event));
     html.find(".sfc-entry").on("click", event => this.#onEntryClick(event));
     html.find(".sfc-entry").on("dblclick", event => this.#onEntryDoubleClick(event));
+
+    // A render rebuilds both lists scrolled to the top, so bring the selected rows back into view.
+    window.setTimeout(() => {
+      html.find(".sfc-entry.is-selected").each((_, row) => row.scrollIntoView?.({block: "nearest"}));
+    }, 0);
   }
 
   async close(options) {
+    this.#queueStateSave.cancel?.();
     await this.#saveState();
     if ( fileCommanderApp === this ) fileCommanderApp = null;
     return super.close(options);
   }
 
   #buildCommandBar() {
-    const canDelete = supportsDeleteOperation();
+    const canUpload = canUploadFiles();
+    const writeCommand = (key, label, action) => canUpload ? { key, label, action } : { key, label, disabled: true };
 
     return [
       { key: "F3", label: localize("SFC.Command.View"), action: "view" },
       { key: "F4", label: localize("SFC.Command.Edit"), disabled: true },
-      { key: "F5", label: localize("SFC.Command.Copy"), action: "copy" },
+      writeCommand("F5", localize("SFC.Command.Copy"), "copy"),
       { key: "F6", label: localize("SFC.Command.Move"), disabled: true },
-      { key: "F7", label: localize("SFC.Command.Mkdir"), action: "mkdir" },
-      canDelete
-        ? { key: "F8", label: localize("SFC.Command.Delete"), action: "delete" }
-        : { key: "F8", label: localize("SFC.Command.Delete"), disabled: true },
+      writeCommand("F7", localize("SFC.Command.Mkdir"), "mkdir"),
+      // Foundry has no client API to delete files, so F8 stays a placeholder like F4 and F6.
+      { key: "F8", label: localize("SFC.Command.Delete"), disabled: true },
       { key: "Tab", label: localize("SFC.Command.Switch"), action: "switch-pane" },
-      { key: "Ctrl+U", label: localize("SFC.Command.Upload"), action: "upload" }
+      writeCommand("Ctrl+U", localize("SFC.Command.Upload"), "upload"),
+      { key: "Ctrl+C", label: localize("SFC.Command.CopyPath"), action: "copy-path" }
     ];
+  }
+
+  #statusText() {
+    const selection = this.#getSelectedEntry(this.#getActivePaneKey());
+    if ( !selection ) return localize("SFC.Status.None");
+    return localize("SFC.Status.Selection", {selection: selection.isParent ? selection.label : selection.path});
   }
 
   #loadState() {
@@ -561,12 +576,11 @@ class SFCFileCommanderApp extends Application {
       if ( action === "copy" ) await this.#copySelectionToOtherPane();
       if ( action === "upload" ) await this.#uploadIntoActivePane();
       if ( action === "mkdir" ) await this.#createDirectoryInActivePane();
-      if ( action === "delete" ) await this.#deleteSelectionInActivePane();
+      if ( action === "copy-path" ) await this.#copySelectedPath();
       if ( action === "refresh" ) await this.#refreshPanes();
       if ( action === "switch-pane" ) {
         this.#switchPane();
-        await this.#saveState();
-        this.render(false);
+        this.#applySelectionChange();
       }
     } catch (error) {
       this.#notifyError(error);
@@ -630,9 +644,7 @@ class SFCFileCommanderApp extends Application {
     const side = button.dataset.pane;
     this.state.panes[side].selectedPath = button.dataset.path;
     this.state.activePane = side;
-    await this.#saveState();
-    this.#syncSelectionDisplay();
-    this.#focusAppElement();
+    this.#applySelectionChange();
   }
 
   async #onEntryDoubleClick(event) {
@@ -655,61 +667,56 @@ class SFCFileCommanderApp extends Application {
     const activePane = this.#getActivePaneKey();
 
     if ( event.key === "Tab" ) {
-      event.preventDefault();
+      consumeKeyEvent(event);
       this.#switchPane();
-      await this.#saveState();
-      this.render(false);
+      this.#applySelectionChange();
       return;
     }
 
     if ( event.key === "ArrowUp" ) {
-      event.preventDefault();
+      consumeKeyEvent(event);
       this.#moveSelection(activePane, -1);
-      await this.#saveState();
-      this.render(false);
+      this.#applySelectionChange();
       return;
     }
 
     if ( event.key === "ArrowDown" ) {
-      event.preventDefault();
+      consumeKeyEvent(event);
       this.#moveSelection(activePane, 1);
-      await this.#saveState();
-      this.render(false);
+      this.#applySelectionChange();
       return;
     }
 
     if ( event.key === "Home" ) {
-      event.preventDefault();
+      consumeKeyEvent(event);
       this.#selectAbsoluteIndex(activePane, 0);
-      await this.#saveState();
-      this.render(false);
+      this.#applySelectionChange();
       return;
     }
 
     if ( event.key === "End" ) {
-      event.preventDefault();
+      consumeKeyEvent(event);
       this.#selectAbsoluteIndex(activePane, this.state.panes[activePane].entries.length - 1);
-      await this.#saveState();
-      this.render(false);
+      this.#applySelectionChange();
       return;
     }
 
     if ( event.key === "Backspace" ) {
-      event.preventDefault();
+      consumeKeyEvent(event);
       await this.#browsePane(activePane, parentPath(this.state.panes[activePane].path));
       this.render(false);
       return;
     }
 
     if ( event.key === "ArrowLeft" ) {
-      event.preventDefault();
+      consumeKeyEvent(event);
       await this.#browsePane(activePane, parentPath(this.state.panes[activePane].path));
       this.render(false);
       return;
     }
 
     if ( event.key === "ArrowRight" ) {
-      event.preventDefault();
+      consumeKeyEvent(event);
       try {
         await this.#activateSelectedEntry(activePane);
       } catch (error) {
@@ -719,7 +726,7 @@ class SFCFileCommanderApp extends Application {
     }
 
     if ( event.key === "Enter" ) {
-      event.preventDefault();
+      consumeKeyEvent(event);
       try {
         await this.#activateSelectedEntry(activePane);
       } catch (error) {
@@ -729,7 +736,7 @@ class SFCFileCommanderApp extends Application {
     }
 
     if ( event.key === "F3" ) {
-      event.preventDefault();
+      consumeKeyEvent(event);
       try {
         await this.#viewSelection();
       } catch (error) {
@@ -739,7 +746,7 @@ class SFCFileCommanderApp extends Application {
     }
 
     if ( event.key === "F5" ) {
-      event.preventDefault();
+      consumeKeyEvent(event);
       try {
         await this.#copySelectionToOtherPane();
       } catch (error) {
@@ -749,7 +756,7 @@ class SFCFileCommanderApp extends Application {
     }
 
     if ( event.key === "F7" ) {
-      event.preventDefault();
+      consumeKeyEvent(event);
       try {
         await this.#createDirectoryInActivePane();
       } catch (error) {
@@ -758,10 +765,10 @@ class SFCFileCommanderApp extends Application {
       return;
     }
 
-    if ( event.key === "F8" ) {
-      event.preventDefault();
+    if ( event.key.toLowerCase() === "c" && event.ctrlKey ) {
+      consumeKeyEvent(event);
       try {
-        await this.#deleteSelectionInActivePane();
+        await this.#copySelectedPath();
       } catch (error) {
         this.#notifyError(error);
       }
@@ -769,7 +776,7 @@ class SFCFileCommanderApp extends Application {
     }
 
     if ( event.key.toLowerCase() === "r" && event.ctrlKey ) {
-      event.preventDefault();
+      consumeKeyEvent(event);
       try {
         await this.#refreshPanes();
       } catch (error) {
@@ -779,7 +786,7 @@ class SFCFileCommanderApp extends Application {
     }
 
     if ( event.key.toLowerCase() === "u" && event.ctrlKey ) {
-      event.preventDefault();
+      consumeKeyEvent(event);
       try {
         await this.#uploadIntoActivePane();
       } catch (error) {
@@ -814,7 +821,13 @@ class SFCFileCommanderApp extends Application {
     this.state.activePane = this.#getOtherPaneKey();
   }
 
-  #syncSelectionDisplay() {
+  // Updates the rendered rows in place. A full render would reset the scroll position of long lists.
+  #applySelectionChange() {
+    this.#syncSelectionDisplay({scroll: true});
+    this.#queueStateSave();
+  }
+
+  #syncSelectionDisplay({scroll = false} = {}) {
     const root = this.element;
     if ( !root?.length ) return;
 
@@ -824,10 +837,14 @@ class SFCFileCommanderApp extends Application {
     root.find(`.sfc-pane[data-pane='${activePane}']`).addClass("is-active");
 
     for ( const side of ["left", "right"] ) {
-      const pane = root.find(`.sfc-pane[data-pane='${side}']`);
-      pane.find(".sfc-entry").removeClass("is-selected");
-      pane.find(".sfc-entry").filter((_, element) => element.dataset.path === this.state.panes[side].selectedPath).addClass("is-selected");
+      const rows = root.find(`.sfc-pane[data-pane='${side}']`).find(".sfc-entry");
+      rows.removeClass("is-selected");
+      const selected = rows.filter((_, element) => element.dataset.path === this.state.panes[side].selectedPath).addClass("is-selected");
+      if ( scroll && side === activePane ) selected.get(0)?.scrollIntoView?.({block: "nearest"});
     }
+
+    const status = this.#statusText();
+    root.find(".sfc-status-line").text(status).attr("title", status);
     this.#focusAppElement();
   }
 
@@ -852,7 +869,60 @@ class SFCFileCommanderApp extends Application {
       return;
     }
 
-    window.open(toFetchUrl(selected.path), "_blank", "noopener");
+    await this.#openFile(selected);
+  }
+
+  // Images and videos open in Foundry's image viewer (GMs can show them to players from there), audio plays in a
+  // small dialog, everything else opens in a new browser tab.
+  async #openFile(entry) {
+    const url = toFetchUrl(entry.path);
+    const kind = mediaKind(entry.name);
+    const ImagePopout = foundry.applications?.apps?.ImagePopout;
+
+    if ( (kind === "image" || kind === "video") && ImagePopout ) {
+      await new ImagePopout({src: url, window: {title: entry.name}}).render({force: true});
+      return;
+    }
+
+    if ( kind === "audio" ) {
+      this.#playAudio(entry, url);
+      return;
+    }
+
+    window.open(url, "_blank", "noopener");
+  }
+
+  #playAudio(entry, url) {
+    // Only one preview plays at a time.
+    void this.#audioPreview?.close();
+    void foundry.applications.api.DialogV2.prompt({
+      window: {title: entry.name, icon: "fa-solid fa-music"},
+      classes: ["sfc-audio-preview"],
+      content: `<audio controls autoplay src="${foundry.utils.escapeHTML(url)}"></audio>`,
+      ok: {label: localize("SFC.Dialog.Audio.Close"), icon: "fa-solid fa-xmark"},
+      render: (_event, dialog) => {
+        this.#audioPreview = dialog;
+      },
+      close: (_event, dialog) => {
+        if ( this.#audioPreview === dialog ) this.#audioPreview = null;
+      }
+    });
+  }
+
+  async #copySelectedPath() {
+    const selection = this.#getSelectedEntry(this.#getActivePaneKey());
+    if ( !selection || selection.isParent ) throw new Error(localize("SFC.Notification.NoSelection"));
+
+    // The listed path is what Foundry's FilePicker writes into image and sound fields: relative for User Data
+    // and Public, the full URL for S3 and The Forge.
+    await copyTextToClipboard(selection.path);
+    ui.notifications?.info(localize("SFC.Notification.PathCopied", {path: selection.path}));
+  }
+
+  #ensureUploadPermission() {
+    if ( canUploadFiles() ) return true;
+    ui.notifications?.warn(localize("SFC.Error.NoUploadPermission"));
+    return false;
   }
 
   async #viewSelection() {
@@ -869,6 +939,7 @@ class SFCFileCommanderApp extends Application {
   }
 
   async #copySelectionToOtherPane() {
+    if ( !this.#ensureUploadPermission() ) return;
     const sourceSide = this.#getActivePaneKey();
     const targetSide = this.#getOtherPaneKey();
     const sourcePane = this.state.panes[sourceSide];
@@ -883,13 +954,18 @@ class SFCFileCommanderApp extends Application {
     }
 
     ui.notifications?.info(localize("SFC.Notification.CopyStarted", {name: selection.label}));
-    await this.#copyEntry(selection, sourcePane, targetPane, targetPane.path);
+    const run = createTransferRun(selection.type === "directory");
+    await this.#copyEntry(selection, sourcePane, targetPane, targetPane.path, run);
     await this.#browsePane(targetSide, targetPane.path, {keepSelection: true});
-    ui.notifications?.info(localize("SFC.Notification.CopyFinished", {name: selection.label}));
+    const finishedKey = run.cancelled ? "SFC.Notification.CopyCancelled" : "SFC.Notification.CopyFinished";
+    ui.notifications?.info(localize(finishedKey, {name: selection.label}));
+    this.#notifySkipped(run);
     this.render(false);
   }
 
-  async #copyEntry(entry, sourcePane, targetPane, targetDirectory) {
+  async #copyEntry(entry, sourcePane, targetPane, targetDirectory, run) {
+    if ( run.cancelled ) return;
+
     if ( entry.type === "directory" ) {
       const nextDirectory = joinPath(targetDirectory, entry.name);
       // On The Forge the upload creates missing folders itself, so a failed createDirectory must not stop the copy.
@@ -898,12 +974,45 @@ class SFCFileCommanderApp extends Application {
       const listing = await this.#browseRaw(sourcePane.source, toStoragePath(sourcePane.source, entry.path), sourcePane.bucket);
       const entries = this.#mapEntries(entry.path, listing).filter(child => !child.isParent);
       for ( const child of entries ) {
-        await this.#copyEntry(child, sourcePane, targetPane, nextDirectory);
+        await this.#copyEntry(child, sourcePane, targetPane, nextDirectory, run);
+        if ( run.cancelled ) return;
       }
       return;
     }
 
+    if ( !(await this.#confirmWrite(run, targetPane, targetDirectory, entry.name)) ) return;
     await this.#copyFile(entry, targetPane, targetDirectory);
+  }
+
+  // Resolves to true when the file may be written: no file of that name exists yet, or the user chose to overwrite it.
+  async #confirmWrite(run, pane, directory, name) {
+    const existing = await this.#existingFileNames(run, pane, directory);
+    if ( !existing.has(fileNameKey(name)) ) return true;
+
+    const decision = run.mode === "ask"
+      ? applyOverwriteAnswer(run, await askOverwrite(name, directory, run.multiple))
+      : run.mode;
+    if ( decision === "skip" ) run.skipped += 1;
+    return decision === "overwrite";
+  }
+
+  // Browses each target folder once per run. A folder that does not exist yet holds nothing to overwrite.
+  async #existingFileNames(run, pane, directory) {
+    const target = normalizePath(toStoragePath(pane.source, directory));
+    if ( run.existing.has(target) ) return run.existing.get(target);
+
+    let names;
+    try {
+      names = listingFileNames(await this.#browseRaw(pane.source, target, pane.bucket));
+    } catch (_error) {
+      names = new Set();
+    }
+    run.existing.set(target, names);
+    return names;
+  }
+
+  #notifySkipped(run) {
+    if ( run.skipped ) ui.notifications?.info(localize("SFC.Notification.SkippedExisting", {count: run.skipped}));
   }
 
   async #copyFile(entry, targetPane, targetDirectory) {
@@ -940,6 +1049,7 @@ class SFCFileCommanderApp extends Application {
   }
 
   async #createDirectoryInActivePane() {
+    if ( !this.#ensureUploadPermission() ) return;
     const side = this.#getActivePaneKey();
     const pane = this.state.panes[side];
     if ( !this.#paneSupportsWrite(pane) ) throw new Error(localize("SFC.Notification.CopyUnsupported"));
@@ -967,27 +1077,8 @@ class SFCFileCommanderApp extends Application {
     this.render(false);
   }
 
-  async #deleteSelectionInActivePane() {
-    const side = this.#getActivePaneKey();
-    const pane = this.state.panes[side];
-    const selection = this.#getSelectedEntry(side);
-
-    if ( !selection || selection.isParent ) throw new Error(localize("SFC.Notification.NoSelection"));
-    if ( selection.type !== "file" ) throw new Error(localize("SFC.Error.DeleteFilesOnly"));
-
-    const deleteOperation = getFileDeleteOperation();
-    if ( !supportsDeleteOperation() || !deleteOperation ) throw new Error(localize("SFC.Error.DeleteUnsupported"));
-
-    const options = {};
-    if ( pane.source === "s3" && pane.bucket ) options.bucket = pane.bucket;
-
-    await deleteOperation(pane.source, selection.path, options);
-    await this.#browsePane(side, pane.path, {keepSelection: true});
-    ui.notifications?.info(localize("SFC.Notification.DeleteFinished", {name: selection.name}));
-    this.render(false);
-  }
-
   async #uploadIntoActivePane() {
+    if ( !this.#ensureUploadPermission() ) return;
     const side = this.#getActivePaneKey();
     const pane = this.state.panes[side];
     if ( !this.#paneSupportsWrite(pane) ) throw new Error(localize("SFC.Notification.CopyUnsupported"));
@@ -1001,12 +1092,19 @@ class SFCFileCommanderApp extends Application {
     const body = {};
     if ( pane.source === "s3" && pane.bucket ) body.bucket = pane.bucket;
 
+    const run = createTransferRun(files.length > 1);
+    let uploaded = 0;
     for ( const file of files ) {
+      if ( run.cancelled ) break;
+      if ( !(await this.#confirmWrite(run, pane, pane.path, file.name)) ) continue;
       await getFilePickerClass().upload(pane.source, pane.path, file, body, {notify: false});
+      uploaded += 1;
     }
 
     await this.#browsePane(side, pane.path, {keepSelection: true});
-    ui.notifications?.info(localize("SFC.Notification.UploadFinished", {count: files.length}));
+    const finishedKey = run.cancelled ? "SFC.Notification.UploadCancelled" : "SFC.Notification.UploadFinished";
+    ui.notifications?.info(localize(finishedKey, {count: uploaded}));
+    this.#notifySkipped(run);
     this.render(false);
   }
 
@@ -1202,6 +1300,87 @@ function toFetchUrl(path) {
   return foundry.utils.getRoute(path);
 }
 
+// Same lookup order as Foundry's FilePicker, so "webm" counts as video.
+function mediaKind(name) {
+  const extension = fileExtension(String(name ?? ""));
+  if ( !extension ) return "";
+  if ( Object.hasOwn(CONST.IMAGE_FILE_EXTENSIONS ?? {}, extension) ) return "image";
+  if ( Object.hasOwn(CONST.VIDEO_FILE_EXTENSIONS ?? {}, extension) ) return "video";
+  if ( Object.hasOwn(CONST.AUDIO_FILE_EXTENSIONS ?? {}, extension) ) return "audio";
+  return "";
+}
+
+async function copyTextToClipboard(text) {
+  if ( typeof game.clipboard?.copyPlainText === "function" ) return game.clipboard.copyPlainText(text);
+  return navigator.clipboard.writeText(text);
+}
+
+// Foundry's keybindings listen on window and would act on the canvas behind the commander: the arrow keys pan
+// or move tokens, Backspace deletes the controlled placeables, Tab cycles the view, Ctrl+C copies placeables.
+function consumeKeyEvent(event) {
+  event.preventDefault();
+  event.stopPropagation();
+}
+
+// State of one copy or upload: the overwrite choice for the remaining files ("ask", "overwrite", "skip"),
+// whether the user cancelled, how many files were skipped, and the cached names per target folder.
+function createTransferRun(multiple) {
+  return {
+    multiple,
+    mode: "ask",
+    cancelled: false,
+    skipped: 0,
+    existing: new Map()
+  };
+}
+
+// Names compare case-insensitively: on Windows "Map.png" would overwrite "map.png".
+function fileNameKey(name) {
+  return String(name ?? "").toLowerCase();
+}
+
+function listingFileNames(listing) {
+  return new Set(Array.from(listing?.files ?? []).map(path => fileNameKey(decodeName(baseName(path)))));
+}
+
+// Turns the dialog answer into "overwrite", "skip" or "cancel" and remembers an "apply to all" choice for the run.
+function applyOverwriteAnswer(run, answer) {
+  const action = answer?.action;
+  if ( action !== "overwrite" && action !== "skip" ) {
+    run.cancelled = true;
+    return "cancel";
+  }
+  if ( answer.all ) run.mode = action;
+  return action;
+}
+
+async function askOverwrite(name, directory, multiple) {
+  const escape = foundry.utils.escapeHTML;
+  const message = localize("SFC.Dialog.Overwrite.Content", {name, path: directory || "/"});
+  const applyAll = multiple ? `
+    <div class="form-group">
+      <label for="sfc-overwrite-apply-all">${escape(localize("SFC.Dialog.Overwrite.ApplyAll"))}</label>
+      <input type="checkbox" id="sfc-overwrite-apply-all" name="applyAll">
+    </div>
+  ` : "";
+  const answer = action => (_event, button) => ({action, all: button.form?.elements.applyAll?.checked === true});
+
+  // A single file has nothing to skip to, so it only offers overwrite or cancel.
+  const buttons = [
+    {action: "overwrite", label: localize("SFC.Dialog.Overwrite.Overwrite"), icon: "fa-solid fa-floppy-disk", callback: answer("overwrite")},
+    multiple ? {action: "skip", label: localize("SFC.Dialog.Overwrite.Skip"), icon: "fa-solid fa-forward", callback: answer("skip"), default: true} : null,
+    {action: "cancel", label: localize("SFC.Dialog.Overwrite.Cancel"), icon: "fa-solid fa-xmark", default: !multiple}
+  ].filter(Boolean);
+
+  return foundry.applications.api.DialogV2.wait({
+    window: {title: localize("SFC.Dialog.Overwrite.Title"), icon: "fa-solid fa-triangle-exclamation"},
+    position: {width: 440},
+    content: `<p>${escape(message)}</p>${applyAll}`,
+    buttons,
+    rejectClose: false
+  });
+}
+
 async function chooseFiles() {
   return new Promise(resolve => {
     const input = document.createElement("input");
@@ -1237,10 +1416,11 @@ export const __test__ = {
   FORGE_SOURCE,
   WRITABLE_SOURCES,
   HOTKEY_PRECEDENCE,
+  STATE_SAVE_DELAY,
   MODULE_TRANSLATION_CACHE,
   getFoundryGeneration,
-  getFileDeleteOperation,
-  supportsDeleteOperation,
+  canBrowseFiles,
+  canUploadFiles,
   installSceneControlClickFallback,
   toggleFileCommanderFromSceneControl,
   openFileCommander,
@@ -1266,5 +1446,13 @@ export const __test__ = {
   decodeName,
   fileExtension,
   toFetchUrl,
+  mediaKind,
+  copyTextToClipboard,
+  consumeKeyEvent,
+  createTransferRun,
+  fileNameKey,
+  listingFileNames,
+  applyOverwriteAnswer,
+  askOverwrite,
   chooseFiles
 };

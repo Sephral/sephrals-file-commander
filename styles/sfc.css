@@ -204,9 +204,26 @@
   color: #ffd7d7;
 }
 
+.sfc-status-line {
+  flex: 0 0 auto;
+  padding: 0.2rem 0.5rem;
+  color: var(--sfc-dim);
+  border: 1px solid var(--sfc-line);
+  background: var(--sfc-panel-dark);
+  font-size: 0.82rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: text;
+}
+
+.sfc-audio-preview audio {
+  width: 100%;
+}
+
 .sfc-function-bar {
   display: grid;
-  grid-template-columns: repeat(8, minmax(0, 1fr));
+  grid-template-columns: repeat(9, minmax(0, 1fr));
   gap: 1px;
   padding: 1px;
   background: var(--sfc-line);
@@ -246,6 +263,6 @@
   }
 
   .sfc-function-bar {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }

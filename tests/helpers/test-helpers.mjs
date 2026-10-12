@@ -10,6 +10,15 @@ export class TestElement {
     this.attributes = {};
     this.handlers = new Map();
     this.finders = new Map();
+    this.scrollCalls = [];
+  }
+
+  scrollIntoView(options) {
+    this.scrollCalls.push(options);
+  }
+
+  text(value) {
+    this.textContent = value;
   }
 
   on(event, handler) {
@@ -28,6 +37,9 @@ export class TestElement {
       target: extra.target ?? this,
       preventDefault() {
         this.defaultPrevented = true;
+      },
+      stopPropagation() {
+        this.propagationStopped = true;
       },
       ...extra
     };
@@ -128,6 +140,16 @@ export class JQueryCollection {
   get(index) {
     return this.elements[index];
   }
+
+  text(value) {
+    for (const element of this.elements) element.text(value);
+    return this;
+  }
+
+  each(callback) {
+    this.elements.forEach((element, index) => callback(index, element));
+    return this;
+  }
 }
 
 function createHooksStub() {
@@ -172,7 +194,7 @@ export function createHtmlHarness() {
   const copyButton = new TestElement({ dataset: { action: "copy" } });
   const uploadButton = new TestElement({ dataset: { action: "upload" } });
   const mkdirButton = new TestElement({ dataset: { action: "mkdir" } });
-  const deleteButton = new TestElement({ dataset: { action: "delete" } });
+  const copyPathButton = new TestElement({ dataset: { action: "copy-path" } });
   const refreshButton = new TestElement({ dataset: { action: "refresh" } });
   const switchButton = new TestElement({ dataset: { action: "switch-pane" } });
   const leftForm = new TestElement({ dataset: { pane: "left" } });
@@ -187,13 +209,14 @@ export function createHtmlHarness() {
   const rightBucket = new TestElement({ dataset: { pane: "right" }, value: "bucket-b" });
   const leftEntry = new TestElement({ dataset: { pane: "left", path: "folder-a", entryType: "directory" } });
   const rightEntry = new TestElement({ dataset: { pane: "right", path: "file-b.txt", entryType: "file" } });
+  const statusLine = new TestElement();
 
   leftPane.setFind(".sfc-entry", new JQueryCollection([leftEntry], root));
   rightPane.setFind(".sfc-entry", new JQueryCollection([rightEntry], root));
 
   const allEntries = new JQueryCollection([leftEntry, rightEntry], root);
   const allPanes = new JQueryCollection([leftPane, rightPane], root);
-  const toolbar = new JQueryCollection([viewButton, copyButton, uploadButton, mkdirButton, deleteButton, refreshButton, switchButton], root);
+  const toolbar = new JQueryCollection([viewButton, copyButton, uploadButton, mkdirButton, refreshButton, switchButton, copyPathButton], root);
   const pathRows = new JQueryCollection([leftForm, rightForm], root);
   const sourceSelects = new JQueryCollection([leftSource, rightSource], root);
   const bucketSelects = new JQueryCollection([leftBucket, rightBucket], root);
@@ -205,7 +228,9 @@ export function createHtmlHarness() {
     if (selector === ".sfc-path-row") return pathRows;
     if (selector === "select[name='source']") return sourceSelects;
     if (selector === "select[name='bucket']") return bucketSelects;
-    if (selector === "[data-action='view'], [data-action='copy'], [data-action='upload'], [data-action='mkdir'], [data-action='delete'], [data-action='refresh'], [data-action='switch-pane']") return toolbar;
+    if (selector === "[data-action='view'], [data-action='copy'], [data-action='upload'], [data-action='mkdir'], [data-action='refresh'], [data-action='switch-pane'], [data-action='copy-path']") return toolbar;
+    if (selector === ".sfc-status-line") return new JQueryCollection([statusLine], root);
+    if (selector === ".sfc-entry.is-selected") return new JQueryCollection([leftEntry, rightEntry].filter((entry) => entry.hasClass("is-selected")), root);
     const paneMatch = /^\.sfc-pane\[data-pane='(left|right)'\]$/.exec(selector);
     if (paneMatch) return paneMatch[1] === "left" ? new JQueryCollection([leftPane], root) : new JQueryCollection([rightPane], root);
     return new JQueryCollection([], root);
@@ -221,7 +246,7 @@ export function createHtmlHarness() {
       copyButton,
       uploadButton,
       mkdirButton,
-      deleteButton,
+      copyPathButton,
       refreshButton,
       switchButton,
       leftForm,
@@ -233,7 +258,8 @@ export function createHtmlHarness() {
       leftBucket,
       rightBucket,
       leftEntry,
-      rightEntry
+      rightEntry,
+      statusLine
     }
   };
 }
@@ -245,7 +271,7 @@ export function createTestEnvironment() {
     keybindingCalls: [],
     settingWrites: [],
     settingsValues: new Map(),
-    notifications: { info: [], error: [] },
+    notifications: { info: [], warn: [], error: [] },
     controlRenders: [],
     controlActivations: [],
     browseCalls: [],
@@ -259,7 +285,14 @@ export function createTestEnvironment() {
     windowOpenCalls: [],
     windowEventHandlers: new Map(),
     createdInputs: [],
-    setTimeoutCalls: []
+    setTimeoutCalls: [],
+    permissions: {},
+    dialogCalls: [],
+    dialogAnswers: [],
+    imagePopouts: [],
+    clipboardWrites: [],
+    pendingDebounced: new Set(),
+    debounceDelays: []
   };
 
   const hooks = createHooksStub();
@@ -301,6 +334,66 @@ export function createTestEnvironment() {
       },
       getRoute(path) {
         return `/route/${path}`;
+      },
+      escapeHTML(value) {
+        const entities = { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#x27;" };
+        return String(value).replace(/[&<>"']/g, (char) => entities[char]);
+      },
+      // Runs only when a test flushes it, so tests can check that rapid calls collapse into one.
+      debounce(callback, delay) {
+        state.debounceDelays.push(delay);
+        let pending = null;
+        function debounced(...args) {
+          pending = () => callback.apply(this, args);
+          state.pendingDebounced.add(debounced);
+        }
+        debounced.flush = () => {
+          const run = pending;
+          pending = null;
+          state.pendingDebounced.delete(debounced);
+          run?.();
+        };
+        debounced.cancel = () => {
+          pending = null;
+          state.pendingDebounced.delete(debounced);
+        };
+        return debounced;
+      }
+    },
+    applications: {
+      api: {
+        DialogV2: {
+          async wait(config) {
+            state.dialogCalls.push({ type: "wait", config });
+            const answer = state.dialogAnswers.shift();
+            return typeof answer === "function" ? answer(config) : (answer ?? null);
+          },
+          async prompt(config) {
+            state.dialogCalls.push({ type: "prompt", config });
+            const dialog = {
+              closed: false,
+              async close() {
+                this.closed = true;
+                config.close?.(undefined, this);
+              }
+            };
+            config.render?.(undefined, dialog);
+            return "ok";
+          }
+        }
+      },
+      apps: {
+        ImagePopout: class {
+          constructor(options) {
+            this.options = options;
+            state.imagePopouts.push(this);
+          }
+
+          async render(options) {
+            this.renderOptions = options;
+            return this;
+          }
+        }
       }
     }
   };
@@ -371,7 +464,17 @@ export function createTestEnvironment() {
       }
     },
     release: { generation: 14 },
-    user: { isGM: true }
+    user: {
+      isGM: true,
+      can(permission) {
+        return state.permissions[permission] ?? true;
+      }
+    },
+    clipboard: {
+      async copyPlainText(text) {
+        state.clipboardWrites.push(text);
+      }
+    }
   };
 
   const ui = {
@@ -391,6 +494,9 @@ export function createTestEnvironment() {
     notifications: {
       info(message) {
         state.notifications.info.push(message);
+      },
+      warn(message) {
+        state.notifications.warn.push(message);
       },
       error(message) {
         state.notifications.error.push(message);
@@ -440,7 +546,12 @@ export function createTestEnvironment() {
     }
   };
 
-  globalThis.CONST = { KEYBINDING_PRECEDENCE: { NORMAL: 0 } };
+  globalThis.CONST = {
+    KEYBINDING_PRECEDENCE: { NORMAL: 0 },
+    IMAGE_FILE_EXTENSIONS: { gif: "image/gif", jpg: "image/jpeg", png: "image/png", svg: "image/svg+xml", webp: "image/webp" },
+    VIDEO_FILE_EXTENSIONS: { m4v: "video/mp4", mp4: "video/mp4", webm: "video/webm" },
+    AUDIO_FILE_EXTENSIONS: { mp3: "audio/mpeg", ogg: "audio/ogg", wav: "audio/wav", webm: "audio/webm" }
+  };
   globalThis.Hooks = hooks;
   globalThis.Application = TestApplication;
   globalThis.FormApplication = TestFormApplication;
@@ -504,13 +615,26 @@ export function createTestEnvironment() {
     ["SFC.Notification.CopyStarted", "copy started {name}"],
     ["SFC.Notification.CopyFinished", "copy finished {name}"],
     ["SFC.Notification.CopyUnsupported", "copy unsupported"],
-    ["SFC.Notification.DeleteFinished", "deleted {name}"],
     ["SFC.Notification.DirectoryCreated", "directory created {name}"],
     ["SFC.Notification.UploadFinished", "upload finished {count}"],
     ["SFC.Notification.Cancelled", "cancelled"],
     ["SFC.Notification.Error", "error {message}"],
-    ["SFC.Error.DeleteFilesOnly", "delete files only"],
-    ["SFC.Error.DeleteUnsupported", "delete unsupported"],
+    ["SFC.Error.NoBrowsePermission", "no browse permission"],
+    ["SFC.Error.NoUploadPermission", "no upload permission"],
+    ["SFC.Command.CopyPath", "Path"],
+    ["SFC.Status.Selection", "Selection: {selection}"],
+    ["SFC.Status.None", "Selection: none"],
+    ["SFC.Notification.PathCopied", "path copied {path}"],
+    ["SFC.Notification.CopyCancelled", "copy cancelled {name}"],
+    ["SFC.Notification.UploadCancelled", "upload cancelled {count}"],
+    ["SFC.Notification.SkippedExisting", "skipped {count}"],
+    ["SFC.Dialog.Overwrite.Title", "File exists"],
+    ["SFC.Dialog.Overwrite.Content", "{name} exists in {path}"],
+    ["SFC.Dialog.Overwrite.ApplyAll", "Apply to all"],
+    ["SFC.Dialog.Overwrite.Overwrite", "Overwrite"],
+    ["SFC.Dialog.Overwrite.Skip", "Skip"],
+    ["SFC.Dialog.Overwrite.Cancel", "Cancel"],
+    ["SFC.Dialog.Audio.Close", "Close"],
     ["SFC.Error.NoWritableTarget", "no writable target"],
     ["SFC.Error.FetchFailed", "fetch failed"],
     ["SFC.Error.MissingBucket", "missing bucket"],
@@ -533,12 +657,15 @@ export function createTestEnvironment() {
     state,
     hooks,
     game,
+    flushDebounced() {
+      for (const debounced of Array.from(state.pendingDebounced)) debounced.flush();
+    },
     reset() {
       state.registerCalls = [];
       state.registerMenuCalls = [];
       state.keybindingCalls = [];
       state.settingWrites = [];
-      state.notifications = { info: [], error: [] };
+      state.notifications = { info: [], warn: [], error: [] };
       state.controlRenders = [];
       state.controlActivations = [];
       state.browseCalls = [];
@@ -553,6 +680,13 @@ export function createTestEnvironment() {
       state.createdInputs = [];
       state.setTimeoutCalls = [];
       state.lastPromptOptions = null;
+      state.permissions = {};
+      state.dialogCalls = [];
+      state.dialogAnswers = [];
+      state.imagePopouts = [];
+      state.clipboardWrites = [];
+      state.pendingDebounced = new Set();
+      state.debounceDelays = [];
       state.settingsValues = new Map([
         ["sephrals-file-commander.uiLanguage", "default"],
         ["sephrals-file-commander.restoreLastSession", true],
