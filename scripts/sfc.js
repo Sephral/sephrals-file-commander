@@ -1,3 +1,5 @@
+import {countFeature, markUsed, registerUsage} from "./usage.mjs";
+
 const MODULE_ID = "sephrals-file-commander";
 const DEFAULT_SCENE_CONTROL = "tokens";
 const STATE_SETTING = "windowState";
@@ -115,6 +117,11 @@ Hooks.once("init", () => {
     restricted: true
   });
 
+  registerUsage(MODULE_ID, {
+    features: ["entryCopied", "filesUploaded", "folderCreated", "pathCopied", "fileOpened", "keyCommand", "selfTestRun"],
+    settings: [SHOW_SCENE_CONTROL_SETTING, RESTORE_STATE_SETTING, DEFAULT_LEFT_SOURCE_SETTING]
+  });
+
   game.keybindings.register(MODULE_ID, "openFileCommander", {
     name: localize("SFC.Settings.Menu.Label"),
     hint: localize("SFC.Settings.Menu.Hint"),
@@ -220,6 +227,7 @@ function openFileCommander() {
     return null;
   }
 
+  markUsed(MODULE_ID);
   if ( !fileCommanderApp ) fileCommanderApp = new SFCFileCommanderApp();
   fileCommanderApp.options.title = localize("SFC.Title");
   fileCommanderApp.render(true);
@@ -705,6 +713,11 @@ class SFCFileCommanderApp extends Application {
     if ( !this.#shouldHandleNavigationKey(event) ) return;
     const activePane = this.#getActivePaneKey();
 
+    // Commands by key, not the navigation keys: shows whether the Commander keys are used.
+    if ( ["F3", "F5", "F7"].includes(event.key) || (event.ctrlKey && ["c", "r", "u"].includes(event.key?.toLowerCase())) ) {
+      countFeature(MODULE_ID, "keyCommand");
+    }
+
     if ( event.key === "Tab" ) {
       consumeKeyEvent(event);
       this.#switchPane();
@@ -917,6 +930,7 @@ class SFCFileCommanderApp extends Application {
     const url = toFetchUrl(entry.path);
     const kind = mediaKind(entry.name);
     const ImagePopout = foundry.applications?.apps?.ImagePopout;
+    countFeature(MODULE_ID, "fileOpened");
 
     if ( (kind === "image" || kind === "video") && ImagePopout ) {
       await new ImagePopout({src: url, window: {title: entry.name}}).render({force: true});
@@ -955,6 +969,7 @@ class SFCFileCommanderApp extends Application {
     // The listed path is what Foundry's FilePicker writes into image and sound fields: relative for User Data
     // and Public, the full URL for S3 and The Forge.
     await copyTextToClipboard(selection.path);
+    countFeature(MODULE_ID, "pathCopied");
     ui.notifications?.info(localize("SFC.Notification.PathCopied", {path: selection.path}));
   }
 
@@ -995,6 +1010,7 @@ class SFCFileCommanderApp extends Application {
     ui.notifications?.info(localize("SFC.Notification.CopyStarted", {name: selection.label}));
     const run = createTransferRun(selection.type === "directory");
     await this.#copyEntry(selection, sourcePane, targetPane, targetPane.path, run);
+    countFeature(MODULE_ID, "entryCopied");
     await this.#browsePane(targetSide, targetPane.path, {keepSelection: true});
     const finishedKey = run.cancelled ? "SFC.Notification.CopyCancelled" : "SFC.Notification.CopyFinished";
     ui.notifications?.info(localize(finishedKey, {name: selection.label}));
@@ -1112,6 +1128,7 @@ class SFCFileCommanderApp extends Application {
 
     const path = joinPath(pane.path, directoryName);
     await this.#ensureDirectory(pane, path);
+    countFeature(MODULE_ID, "folderCreated");
     await this.#browsePane(side, pane.path, {keepSelection: true});
     ui.notifications?.info(localize("SFC.Notification.DirectoryCreated", {name: directoryName}));
     this.render(false);
@@ -1140,6 +1157,7 @@ class SFCFileCommanderApp extends Application {
       await getFilePickerClass().upload(pane.source, pane.path, file, body, {notify: false});
       uploaded += 1;
     }
+    if ( uploaded ) countFeature(MODULE_ID, "filesUploaded");
 
     await this.#browsePane(side, pane.path, {keepSelection: true});
     const finishedKey = run.cancelled ? "SFC.Notification.UploadCancelled" : "SFC.Notification.UploadFinished";
@@ -1501,6 +1519,7 @@ async function checkIntegrations() {
 
 // Runs the self-test and reports the result as a notification and a whispered chat message.
 async function runSelfTest({report = true} = {}) {
+  countFeature(MODULE_ID, "selfTestRun");
   await ensureModuleTranslationsLoaded();
   const {problems, checks} = await checkIntegrations();
   const versions = localize("SFC.SelfTest.Version", {current: game.version, tested: TESTED_VERSIONS.core});
