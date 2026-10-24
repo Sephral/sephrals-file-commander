@@ -89,5 +89,18 @@
   "SFC.Storage.data": "User Data",
   "SFC.Storage.public": "Public",
   "SFC.Storage.s3": "S3",
-  "SFC.Storage.forgevtt": "Assets Library"
+  "SFC.Storage.forgevtt": "Assets Library",
+  "SFC.Toolbar.Settings": "Einstellungen",
+  "SFC.SelfTest.Title": "File Commander Selbsttest",
+  "SFC.SelfTest.Run": "Selbsttest starten",
+  "SFC.SelfTest.Hint": "Prüft die Dateiauswahl, jeden Speicher, das Fenster und die Zwischenablage. Nach jedem Update von Foundry ausführen.",
+  "SFC.SelfTest.Passed": "Selbsttest bestanden: {checks} Prüfungen.",
+  "SFC.SelfTest.Problems": "Selbsttest: {problems} von {checks} Prüfungen fehlgeschlagen. Details im Chat.",
+  "SFC.SelfTest.Version": "Foundry {current} (geprüft {tested})",
+  "SFC.SelfTest.NewVersions": "Der File Commander wurde mit einem älteren Foundry als {versions} geprüft. Der Selbsttest in den Moduleinstellungen zeigt, ob noch alles funktioniert.",
+  "SFC.SelfTest.FilePicker": "Foundrys Dateiauswahl wurde nicht gefunden.",
+  "SFC.SelfTest.Browse": "Diese Speicher lassen sich nicht durchsuchen: {storages}.",
+  "SFC.SelfTest.Template": "Die Fenstervorlage des Moduls fehlt.",
+  "SFC.SelfTest.Texts": "Die Texte des Moduls fehlen.",
+  "SFC.SelfTest.Clipboard": "Der Browser erlaubt kein Kopieren in die Zwischenablage, daher lassen sich Pfade nicht kopieren. Browser erlauben es nur über https oder localhost."
 }

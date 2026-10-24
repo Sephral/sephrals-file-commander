@@ -40,10 +40,17 @@ Opening the commander needs the Foundry permission to browse files. Copy, upload
 * `Restore last session` remembers the panel state between openings
 * `Show scene control button` toggles the scene control icon on the left side
 * `Default left source` and `Default right source` define the initial storages when no earlier session is restored
+* `Run self test` checks the file picker, every storage, the window and the clipboard. Run it after every Foundry update. When a newer Foundry than the tested one is installed, the GM gets a notice once
+
+The gear in the title bar of the commander opens these settings.
 
 ## The Forge
 
 On [The Forge](https://forge-vtt.com/) the commander adds your Assets Library to the source list. Browsing, copying, uploads and new folders work there, and files land in your Assets Library at the path shown in the panel. A panel whose default source is `User Data` starts in the Assets Library instead. Sessions restored from an earlier visit keep their source. Outside The Forge nothing changes.
+
+## Macros
+
+`game.modules.get("sephrals-file-commander").api` offers `open()`, which opens the commander, and `runSelfTest()`, which runs the self test (GM).
 
 ## Intentional limits
 

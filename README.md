@@ -32,7 +32,7 @@ Foundry does not let modules delete, move or rename files during a game session.
 
 Search for **File Commander** in Foundry's module browser or open the [package page](https://foundryvtt.com/packages/sephrals-file-commander).
 
-Foundry VTT v13 and v14 · any game system · English and German
+Foundry VTT 13 and 14 · any game system · English and German
 
 ## Learn more
 

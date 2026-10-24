@@ -89,5 +89,18 @@
   "SFC.Storage.data": "User Data",
   "SFC.Storage.public": "Public",
   "SFC.Storage.s3": "S3",
-  "SFC.Storage.forgevtt": "Assets Library"
+  "SFC.Storage.forgevtt": "Assets Library",
+  "SFC.Toolbar.Settings": "Settings",
+  "SFC.SelfTest.Title": "File Commander self test",
+  "SFC.SelfTest.Run": "Run self test",
+  "SFC.SelfTest.Hint": "Checks the file picker, every storage, the window and the clipboard. Run it after an update of Foundry.",
+  "SFC.SelfTest.Passed": "Self test passed: {checks} checks.",
+  "SFC.SelfTest.Problems": "Self test: {problems} of {checks} checks failed. See the chat message.",
+  "SFC.SelfTest.Version": "Foundry {current} (verified {tested})",
+  "SFC.SelfTest.NewVersions": "File Commander was verified with an older Foundry than {versions}. Run the self test in the module settings to check that everything still works.",
+  "SFC.SelfTest.FilePicker": "Foundry's file picker was not found.",
+  "SFC.SelfTest.Browse": "These storages cannot be browsed: {storages}.",
+  "SFC.SelfTest.Template": "The window template of the module is missing.",
+  "SFC.SelfTest.Texts": "The texts of the module are missing.",
+  "SFC.SelfTest.Clipboard": "The browser allows no copying to the clipboard, so paths cannot be copied. Browsers allow it only on https or localhost."
 }

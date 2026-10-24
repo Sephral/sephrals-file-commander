@@ -51,8 +51,8 @@ test.after(() => {
 
 test("registers settings, menu, keybinding, and scene controls", async () => {
   await env.hooks.trigger("init");
-  assert.equal(env.state.registerCalls.length, 6);
-  assert.equal(env.state.registerMenuCalls.length, 1);
+  assert.equal(env.state.registerCalls.length, 7);
+  assert.equal(env.state.registerMenuCalls.length, 2);
   assert.equal(env.state.keybindingCalls.length, 1);
   assert.equal(env.state.keybindingCalls[0].data.onDown(), true);
 

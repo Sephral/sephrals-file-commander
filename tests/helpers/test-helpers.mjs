@@ -370,6 +370,11 @@ export function createTestEnvironment() {
           },
           async prompt(config) {
             state.dialogCalls.push({ type: "prompt", config });
+            // The new folder prompt answers with the folder name
+            if (config.ok?.callback) {
+              state.lastPromptOptions = config;
+              return typeof state.promptValue === "function" ? state.promptValue(config) : state.promptValue;
+            }
             const dialog = {
               closed: false,
               async close() {

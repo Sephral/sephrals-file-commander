@@ -6,6 +6,9 @@ const SHOW_SCENE_CONTROL_SETTING = "showSceneControlButton";
 const UI_LANGUAGE_SETTING = "uiLanguage";
 const DEFAULT_LEFT_SOURCE_SETTING = "defaultLeftSource";
 const DEFAULT_RIGHT_SOURCE_SETTING = "defaultRightSource";
+const ACKNOWLEDGED_VERSIONS_SETTING = "acknowledgedVersions";
+// The Foundry version the module was verified against (see the self-test).
+const TESTED_VERSIONS = Object.freeze({core: "14.369"});
 const SUPPORTED_UI_LANGUAGES = Object.freeze(["en", "de"]);
 const DEFAULT_UI_LANGUAGE = "en";
 // The Forge serves the user's Assets Library through this extra FilePicker source.
@@ -87,6 +90,13 @@ Hooks.once("init", () => {
     default: "public"
   });
 
+  game.settings.register(MODULE_ID, ACKNOWLEDGED_VERSIONS_SETTING, {
+    scope: "client",
+    config: false,
+    type: String,
+    default: ""
+  });
+
   game.settings.registerMenu(MODULE_ID, "openFileCommander", {
     name: localize("SFC.Settings.Menu.Name"),
     label: localize("SFC.Settings.Menu.Label"),
@@ -94,6 +104,15 @@ Hooks.once("init", () => {
     icon: "fa-solid fa-table-columns",
     type: SFCOpenMenu,
     restricted: false
+  });
+
+  game.settings.registerMenu(MODULE_ID, "selfTest", {
+    name: localize("SFC.SelfTest.Title"),
+    label: localize("SFC.SelfTest.Run"),
+    hint: localize("SFC.SelfTest.Hint"),
+    icon: "fa-solid fa-stethoscope",
+    type: SFCSelfTestMenu,
+    restricted: true
   });
 
   game.keybindings.register(MODULE_ID, "openFileCommander", {
@@ -114,7 +133,9 @@ Hooks.once("init", () => {
 });
 
 Hooks.once("ready", () => {
-  void ensureModuleTranslationsLoaded();
+  void ensureModuleTranslationsLoaded().then(() => noticeNewVersions());
+  const module = game.modules?.get?.(MODULE_ID);
+  if ( module ) module.api = {open: openFileCommander, runSelfTest};
 });
 
 Hooks.on("getSceneControlButtons", controls => {
@@ -236,6 +257,15 @@ class SFCOpenMenu extends FormApplication {
   async _updateObject() {}
 }
 
+class SFCSelfTestMenu extends FormApplication {
+  render() {
+    if ( game.user?.isGM ) void runSelfTest();
+    return this;
+  }
+
+  async _updateObject() {}
+}
+
 class SFCFileCommanderApp extends Application {
   #queueStateSave = foundry.utils.debounce(() => void this.#saveState(), STATE_SAVE_DELAY);
 
@@ -258,6 +288,15 @@ class SFCFileCommanderApp extends Application {
       resizable: true,
       classes: ["sfc-window"]
     });
+  }
+
+  // A gear in the title bar opens the module settings. Players only get it when the module has settings for them.
+  _getHeaderButtons() {
+    const buttons = super._getHeaderButtons();
+    if ( hasOwnSettings() ) {
+      buttons.unshift({label: localize("SFC.Toolbar.Settings"), class: "sfc-settings", icon: "fa-solid fa-gear", onclick: () => void openModuleSettings()});
+    }
+    return buttons;
   }
 
   async getData() {
@@ -1054,18 +1093,19 @@ class SFCFileCommanderApp extends Application {
     const pane = this.state.panes[side];
     if ( !this.#paneSupportsWrite(pane) ) throw new Error(localize("SFC.Notification.CopyUnsupported"));
 
-    const directoryName = await Dialog.prompt({
-      title: localize("SFC.Dialog.NewFolder.Title"),
+    const directoryName = await foundry.applications.api.DialogV2.prompt({
+      window: {title: localize("SFC.Dialog.NewFolder.Title"), icon: "fa-solid fa-folder-plus"},
       content: `
-        <form>
-          <div class="form-group">
-            <label>${localize("SFC.Dialog.NewFolder.Label")}</label>
-            <input type="text" name="dirname" autofocus>
-          </div>
-        </form>
+        <div class="form-group">
+          <label>${localize("SFC.Dialog.NewFolder.Label")}</label>
+          <input type="text" name="dirname" autofocus>
+        </div>
       `,
-      label: localize("SFC.Dialog.NewFolder.Confirm"),
-      callback: html => html.find("input[name='dirname']").val()?.trim()
+      ok: {
+        label: localize("SFC.Dialog.NewFolder.Confirm"),
+        callback: (_event, button) => button.form.elements.dirname.value.trim()
+      },
+      rejectClose: false
     });
 
     if ( !directoryName ) return;
@@ -1403,6 +1443,92 @@ async function chooseFiles() {
   });
 }
 
+// Whether the current user finds settings of this module in the settings dialog.
+function hasOwnSettings() {
+  if ( game.user?.isGM ) return true;
+  return Array.from(game.settings.settings.values()).some(setting => (setting.namespace === MODULE_ID) && setting.config && (setting.scope !== "world"));
+}
+
+// Opens Foundry's settings on the tab of this module.
+async function openModuleSettings() {
+  const sheet = game.settings.sheet;
+  await sheet.render({force: true});
+  try {
+    sheet.changeTab(MODULE_ID, "categories");
+  } catch ( error ) {
+    console.warn(`${MODULE_ID} | The settings have no tab for this module`, error);
+  }
+  sheet.bringToFront?.();
+}
+
+// Self-test: the file picker, every storage the commander offers, the window template, the texts and the clipboard.
+// Meant to be run after every Foundry update; the GM also gets a notice once when a newer Foundry is installed.
+async function checkIntegrations() {
+  const problems = [];
+  let checks = 0;
+  const check = (ok, key, data) => {
+    checks++;
+    if ( !ok ) problems.push(localize(`SFC.SelfTest.${key}`, data));
+  };
+
+  const picker = getFilePickerClass();
+  check(typeof picker?.browse === "function", "FilePicker");
+
+  // S3 needs a bucket, so it is only checked through the file picker itself.
+  const failed = [];
+  for ( const source of availableStorages().filter(storage => storage !== "s3") ) {
+    try {
+      const result = await picker.browse(source, "");
+      if ( !Array.isArray(result?.dirs) ) failed.push(storageLabel(source));
+    } catch ( error ) {
+      failed.push(storageLabel(source));
+      console.warn(`${MODULE_ID} | Self-test could not browse ${source}`, error);
+    }
+  }
+  check(!failed.length, "Browse", {storages: failed.join(", ")});
+
+  let template = false;
+  try {
+    template = (await fetch(`modules/${MODULE_ID}/templates/file-commander.html`, {method: "HEAD"})).ok;
+  } catch ( error ) {
+    console.warn(`${MODULE_ID} | Self-test could not load the window template`, error);
+  }
+  check(template, "Template");
+  check(game.i18n.has("SFC.Title"), "Texts");
+  check((typeof game.clipboard?.copyPlainText === "function") || (typeof navigator.clipboard?.writeText === "function"), "Clipboard");
+  return {problems, checks};
+}
+
+// Runs the self-test and reports the result as a notification and a whispered chat message.
+async function runSelfTest({report = true} = {}) {
+  await ensureModuleTranslationsLoaded();
+  const {problems, checks} = await checkIntegrations();
+  const versions = localize("SFC.SelfTest.Version", {current: game.version, tested: TESTED_VERSIONS.core});
+  const summary = problems.length
+    ? localize("SFC.SelfTest.Problems", {problems: problems.length, checks})
+    : localize("SFC.SelfTest.Passed", {checks});
+
+  if ( problems.length ) ui.notifications.warn(summary, {permanent: true});
+  else ui.notifications.info(summary);
+
+  if ( report ) {
+    const escape = foundry.utils.escapeHTML;
+    let content = `<h3>${escape(localize("SFC.SelfTest.Title"))}</h3><p>${escape(summary)}</p><p><small>${escape(versions)}</small></p>`;
+    if ( problems.length ) content += `<ul>${problems.map(problem => `<li>${escape(problem)}</li>`).join("")}</ul>`;
+    await ChatMessage.implementation.create({content, whisper: [game.user.id], speaker: {alias: game.modules.get(MODULE_ID)?.title}});
+  }
+  return {problems, checks};
+}
+
+// Tells the GM once when Foundry is newer than the version the module was verified against.
+function noticeNewVersions() {
+  if ( !game.user?.isGM || !foundry.utils.isNewerVersion(game.version, TESTED_VERSIONS.core) ) return;
+  const signature = `core ${game.version}`;
+  if ( game.settings.get(MODULE_ID, ACKNOWLEDGED_VERSIONS_SETTING) === signature ) return;
+  void game.settings.set(MODULE_ID, ACKNOWLEDGED_VERSIONS_SETTING, signature);
+  ui.notifications.info(localize("SFC.SelfTest.NewVersions", {versions: signature}), {permanent: true});
+}
+
 export const __test__ = {
   MODULE_ID,
   DEFAULT_SCENE_CONTROL,
@@ -1454,5 +1580,10 @@ export const __test__ = {
   listingFileNames,
   applyOverwriteAnswer,
   askOverwrite,
-  chooseFiles
+  chooseFiles,
+  hasOwnSettings,
+  openModuleSettings,
+  runSelfTest,
+  noticeNewVersions,
+  TESTED_VERSIONS
 };
