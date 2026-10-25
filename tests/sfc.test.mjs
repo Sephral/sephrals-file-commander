@@ -51,7 +51,7 @@ test.after(() => {
 
 test("registers settings, menu, keybinding, and scene controls", async () => {
   await env.hooks.trigger("init");
-  // The module's seven settings and the hidden consent setting of the shared usage library.
+  // The module's seven settings and the hidden consent setting of the usage statistics.
   assert.equal(env.state.registerCalls.length, 8);
   assert.equal(env.state.registerMenuCalls.length, 2);
   assert.equal(env.state.keybindingCalls.length, 1);
