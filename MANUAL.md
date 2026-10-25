@@ -44,6 +44,19 @@ Opening the commander needs the Foundry permission to browse files. Copy, upload
 
 The gear in the title bar of the commander opens these settings.
 
+## Usage statistics
+
+The module can take part in a small usage report shared by all of Sephral’s modules. Nothing is counted or sent until the GM agrees: shortly after the world starts, the active GM is asked, and the question comes back at every start until there is an answer. The answer counts for all of Sephral’s modules in the world. *Share usage statistics* in the module settings turns the report on or off at any time, and *Manage statistics* below it shows what the report contains right now.
+
+With the GM’s consent only the active GM’s browser counts, and it sends at most one report a day. The question lists everything the report contains, from the Foundry version to a random world ID. For the File Commander it holds:
+
+* on how many of the last 30 days the module was used
+* how often files are opened, paths are copied, files or folders are copied to the other pane, folders are created, files are uploaded, the Commander key commands are used and the self test runs
+* the settings *Show scene control button*, *Restore last session* and *Default left source* (only the chosen option)
+* where errors occur in the module code: file, line and error type, never the error message
+
+No names, chat messages, notes, dice results or other content of the world are sent.
+
 ## The Forge
 
 On [The Forge](https://forge-vtt.com/) the commander adds your Assets Library to the source list. Browsing, copying, uploads and new folders work there, and files land in your Assets Library at the path shown in the panel. A panel whose default source is `User Data` starts in the Assets Library instead. Sessions restored from an earlier visit keep their source. Outside The Forge nothing changes.
