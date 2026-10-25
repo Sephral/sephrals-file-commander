@@ -11,16 +11,36 @@ export class TestElement {
     this.classes = new Set();
     this.attributes = {};
     this.handlers = new Map();
-    this.finders = new Map();
     this.scrollCalls = [];
+    this.focusCalls = 0;
+    this.parent = null;
+    const classes = this.classes;
+    this.classList = {
+      add: (name) => classes.add(name),
+      remove: (name) => classes.delete(name),
+      contains: (name) => classes.has(name),
+      toggle(name, force = !classes.has(name)) {
+        if (force) classes.add(name);
+        else classes.delete(name);
+        return force;
+      }
+    };
+  }
+
+  focus() {
+    this.focusCalls += 1;
+  }
+
+  setAttribute(name, value) {
+    this.attributes[name] = String(value);
+  }
+
+  getAttribute(name) {
+    return this.attributes[name] ?? null;
   }
 
   scrollIntoView(options) {
     this.scrollCalls.push(options);
-  }
-
-  text(value) {
-    this.textContent = value;
   }
 
   on(event, handler) {
@@ -49,6 +69,10 @@ export class TestElement {
     for (const handler of this.handlers.get(event) ?? []) {
       handler(eventObject);
     }
+    // Bubbles up to the window element, where the commander listens for keys.
+    for (let node = this.parent; node && !eventObject.propagationStopped; node = node.parent) {
+      for (const handler of node.handlers.get(event) ?? []) handler(eventObject);
+    }
 
     return eventObject;
   }
@@ -65,20 +89,12 @@ export class TestElement {
     return this.classes.has(name);
   }
 
-  attr(name, value) {
-    this.attributes[name] = value;
-  }
-
-  setFind(selector, collection) {
-    this.finders.set(selector, collection);
-  }
-
-  find(selector) {
-    return this.finders.get(selector) ?? new JQueryCollection([]);
-  }
-
   querySelector(selector) {
-    return this.querySelectorMap?.get(selector) ?? null;
+    return this.querySelectorMap?.get(selector) ?? this.querySelectorAll(selector)[0] ?? null;
+  }
+
+  querySelectorAll(selector) {
+    return this.querySelectorAllHandler ? this.querySelectorAllHandler(selector) : [];
   }
 
   setQuerySelector(selector, value) {
@@ -92,65 +108,6 @@ export class TestElement {
 
   setClosest(handler) {
     this.closestHandler = handler;
-  }
-}
-
-export class JQueryCollection {
-  constructor(elements = [], root = null) {
-    this.elements = elements;
-    this.root = root;
-    this.length = elements.length;
-  }
-
-  on(event, handler) {
-    for (const element of this.elements) element.on(event, handler);
-    return this;
-  }
-
-  attr(name, value) {
-    for (const element of this.elements) element.attr(name, value);
-    return this;
-  }
-
-  trigger(event, extra = {}) {
-    for (const element of this.elements) element.trigger(event, extra);
-    return this;
-  }
-
-  removeClass(name) {
-    for (const element of this.elements) element.removeClass(name);
-    return this;
-  }
-
-  addClass(name) {
-    for (const element of this.elements) element.addClass(name);
-    return this;
-  }
-
-  filter(predicate) {
-    return new JQueryCollection(this.elements.filter((element, index) => predicate(index, element)), this.root);
-  }
-
-  find(selector) {
-    const nested = [];
-    for (const element of this.elements) {
-      nested.push(...element.find(selector).elements);
-    }
-    return new JQueryCollection(nested, this.root);
-  }
-
-  get(index) {
-    return this.elements[index];
-  }
-
-  text(value) {
-    for (const element of this.elements) element.text(value);
-    return this;
-  }
-
-  each(callback) {
-    this.elements.forEach((element, index) => callback(index, element));
-    return this;
   }
 }
 
@@ -213,33 +170,30 @@ export function createHtmlHarness() {
   const rightEntry = new TestElement({ dataset: { pane: "right", path: "file-b.txt", entryType: "file" } });
   const statusLine = new TestElement();
 
-  leftPane.setFind(".sfc-entry", new JQueryCollection([leftEntry], root));
-  rightPane.setFind(".sfc-entry", new JQueryCollection([rightEntry], root));
+  app.parent = root;
+  for (const element of [leftPane, rightPane, statusLine]) element.parent = app;
+  for (const element of [leftForm, leftSource, leftBucket, leftEntry]) element.parent = leftPane;
+  for (const element of [rightForm, rightSource, rightBucket, rightEntry]) element.parent = rightPane;
+  const toolbar = [viewButton, copyButton, uploadButton, mkdirButton, refreshButton, switchButton, copyPathButton];
+  for (const button of toolbar) button.parent = app;
 
-  const allEntries = new JQueryCollection([leftEntry, rightEntry], root);
-  const allPanes = new JQueryCollection([leftPane, rightPane], root);
-  const toolbar = new JQueryCollection([viewButton, copyButton, uploadButton, mkdirButton, refreshButton, switchButton, copyPathButton], root);
-  const pathRows = new JQueryCollection([leftForm, rightForm], root);
-  const sourceSelects = new JQueryCollection([leftSource, rightSource], root);
-  const bucketSelects = new JQueryCollection([leftBucket, rightBucket], root);
-
-  root.find = (selector) => {
-    if (selector === ".sfc-app") return new JQueryCollection([app], root);
-    if (selector === ".sfc-pane") return allPanes;
-    if (selector === ".sfc-entry") return allEntries;
-    if (selector === ".sfc-path-row") return pathRows;
-    if (selector === "select[name='source']") return sourceSelects;
-    if (selector === "select[name='bucket']") return bucketSelects;
-    if (selector === "[data-action='view'], [data-action='copy'], [data-action='upload'], [data-action='mkdir'], [data-action='refresh'], [data-action='switch-pane'], [data-action='copy-path']") return toolbar;
-    if (selector === ".sfc-status-line") return new JQueryCollection([statusLine], root);
-    if (selector === ".sfc-entry.is-selected") return new JQueryCollection([leftEntry, rightEntry].filter((entry) => entry.hasClass("is-selected")), root);
-    const paneMatch = /^\.sfc-pane\[data-pane='(left|right)'\]$/.exec(selector);
-    if (paneMatch) return paneMatch[1] === "left" ? new JQueryCollection([leftPane], root) : new JQueryCollection([rightPane], root);
-    return new JQueryCollection([], root);
+  root.querySelectorAllHandler = (selector) => {
+    if (selector === ".sfc-app") return [app];
+    if (selector === ".sfc-pane") return [leftPane, rightPane];
+    if (selector === ".sfc-entry") return [leftEntry, rightEntry];
+    if (selector === ".sfc-path-row") return [leftForm, rightForm];
+    if (selector === "select[name='source']") return [leftSource, rightSource];
+    if (selector === "select[name='bucket']") return [leftBucket, rightBucket];
+    if (selector === ".sfc-status-line") return [statusLine];
+    if (selector === ".sfc-entry.is-selected") return [leftEntry, rightEntry].filter((entry) => entry.hasClass("is-selected"));
+    if (selector === "[data-action]") return toolbar;
+    const paneEntries = /^\.sfc-pane\[data-pane='(left|right)'\] \.sfc-entry$/.exec(selector);
+    if (paneEntries) return paneEntries[1] === "left" ? [leftEntry] : [rightEntry];
+    return [];
   };
 
   return {
-    root: new JQueryCollection([root], root),
+    root,
     controls: {
       app,
       leftPane,
@@ -299,32 +253,54 @@ export function createTestEnvironment() {
 
   const hooks = createHooksStub();
 
-  class TestApplication {
+  // The part of ApplicationV2 the commander uses: options from DEFAULT_OPTIONS, render, close and the title.
+  class TestApplicationV2 {
+    static DEFAULT_OPTIONS = {};
+
     constructor(options = {}) {
-      this.options = options;
+      this.options = { ...this.constructor.DEFAULT_OPTIONS, ...options };
       this.position = {};
       this.element = null;
+      this.rendered = false;
       this.renderCalls = [];
+      this.bringToFrontCalls = 0;
     }
 
-    static get defaultOptions() {
-      return { base: true, classes: ["base-app"] };
+    get title() {
+      return this.options.window?.title ?? "";
     }
 
-    render(force) {
-      this.renderCalls.push(force);
+    // ApplicationV2 keeps its render state here, read only: a subclass must not use the name for its own data.
+    get state() {
+      return this.rendered ? 2 : 0;
+    }
+
+    // A window frame with the close button in its header, as ApplicationV2#_renderFrame builds it.
+    async _renderFrame() {
+      const inserted = [];
+      const close = { dataset: { action: "close" }, before: (node) => inserted.push(node) };
+      return {
+        inserted,
+        querySelector: (selector) => selector.includes('[data-action="close"]') ? close : null
+      };
+    }
+
+    async render(options = {}) {
+      this.renderCalls.push(options);
+      if (options?.force) this.rendered = true;
       return this;
+    }
+
+    bringToFront() {
+      this.bringToFrontCalls += 1;
     }
 
     async close(options) {
       this.closedWith = options;
+      this.rendered = false;
       return { closed: true, options };
     }
-
-    activateListeners(_html) {}
   }
-
-  class TestFormApplication extends TestApplication {}
 
   const foundry = {
     utils: {
@@ -364,6 +340,8 @@ export function createTestEnvironment() {
     },
     applications: {
       api: {
+        ApplicationV2: TestApplicationV2,
+        HandlebarsApplicationMixin: (Base) => class extends Base {},
         DialogV2: {
           async wait(config) {
             state.dialogCalls.push({ type: "wait", config });
@@ -560,8 +538,6 @@ export function createTestEnvironment() {
     AUDIO_FILE_EXTENSIONS: { mp3: "audio/mpeg", ogg: "audio/ogg", wav: "audio/wav", webm: "audio/webm" }
   };
   globalThis.Hooks = hooks;
-  globalThis.Application = TestApplication;
-  globalThis.FormApplication = TestFormApplication;
   globalThis.foundry = foundry;
   globalThis.FilePicker = FilePicker;
   globalThis.game = game;
@@ -717,4 +693,17 @@ export function createTestEnvironment() {
       globalThis.fetch = originalFetch;
     }
   };
+}
+// Renders a commander window into the harness the way ApplicationV2 does: the window element, the first render with
+// its key listener, the listeners of the content, and the clicks on data-action buttons, which go to options.actions.
+export function renderInto(app, harness) {
+  app.element = harness.root;
+  if (harness.renderedApp !== app) {
+    harness.renderedApp = app;
+    app._onFirstRender({}, {});
+    for (const button of harness.root.querySelectorAll("[data-action]")) {
+      button.on("click", (event) => app.options.actions[button.dataset.action]?.call(app, event, button));
+    }
+  }
+  app._onRender({}, {});
 }

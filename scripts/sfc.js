@@ -198,10 +198,12 @@ function installSceneControlClickFallback() {
   });
 }
 
+// On v13 one click on the control reports the control and its tool, so a window that is still opening stays open.
 function toggleFileCommanderFromSceneControl() {
   if ( fileCommanderApp ) {
     const app = fileCommanderApp;
     scheduleSceneControlRestore();
+    if ( !app.rendered ) return app;
     return app.close({ force: true });
   }
 
@@ -229,9 +231,12 @@ function openFileCommander() {
 
   markUsed(MODULE_ID);
   if ( !fileCommanderApp ) fileCommanderApp = new SFCFileCommanderApp();
-  fileCommanderApp.options.title = localize("SFC.Title");
-  fileCommanderApp.render(true);
-  return fileCommanderApp;
+  const app = fileCommanderApp;
+  const open = app.rendered;
+  void app.render({force: true}).then(() => {
+    if ( open ) app.bringToFront?.();
+  });
+  return app;
 }
 
 function getFoundryGeneration() {
@@ -256,58 +261,88 @@ function canUploadFiles() {
   return game.user?.can("FILES_UPLOAD") === true;
 }
 
-class SFCOpenMenu extends FormApplication {
-  render(force, options) {
+const {ApplicationV2, HandlebarsApplicationMixin} = foundry.applications.api;
+
+// The commander's buttons in the function bar, by their data-action. ApplicationV2 calls them with the window as this.
+const TOOLBAR_ACTIONS = ["view", "copy", "upload", "mkdir", "refresh", "switch-pane", "copy-path"];
+
+// Settings menu buttons that open no window of their own.
+class SFCOpenMenu extends ApplicationV2 {
+  render() {
     openFileCommander();
     return this;
   }
-
-  async _updateObject() {}
 }
 
-class SFCSelfTestMenu extends FormApplication {
+class SFCSelfTestMenu extends ApplicationV2 {
   render() {
     if ( game.user?.isGM ) void runSelfTest();
     return this;
   }
-
-  async _updateObject() {}
 }
 
-class SFCFileCommanderApp extends Application {
+class SFCFileCommanderApp extends HandlebarsApplicationMixin(ApplicationV2) {
   #queueStateSave = foundry.utils.debounce(() => void this.#saveState(), STATE_SAVE_DELAY);
 
   #audioPreview = null;
 
+  #settingsButton = null;
+
   constructor(options = {}) {
     super(options);
-    this.state = this.#loadState();
+    this.session = this.#loadState();
     this.#ensurePaneDefaults("left");
     this.#ensurePaneDefaults("right");
   }
 
-  static get defaultOptions() {
-    return foundry.utils.mergeObject(super.defaultOptions, {
-      id: MODULE_ID,
-      title: localize("SFC.Title"),
-      template: `modules/${MODULE_ID}/templates/file-commander.html`,
-      width: 1360,
-      height: 820,
-      resizable: true,
-      classes: ["sfc-window"]
-    });
+  static DEFAULT_OPTIONS = {
+    id: MODULE_ID,
+    classes: ["sfc-window"],
+    window: {title: "SFC.Title", icon: "fa-solid fa-table-columns", resizable: true},
+    position: {width: 1360, height: 820},
+    actions: {
+      openSettings: () => void openModuleSettings(),
+      ...Object.fromEntries(TOOLBAR_ACTIONS.map(action => [action, function(event, target) {
+        return this._onToolbarAction(event, target);
+      }]))
+    }
+  };
+
+  static PARTS = {
+    main: {template: `modules/${MODULE_ID}/templates/file-commander.html`}
+  };
+
+  // The module language may differ from Foundry's, so the title is localized here instead of by the frame.
+  get title() {
+    return localize("SFC.Title");
   }
 
   // A gear in the title bar opens the module settings. Players only get it when the module has settings for them.
-  _getHeaderButtons() {
-    const buttons = super._getHeaderButtons();
-    if ( hasOwnSettings() ) {
-      buttons.unshift({label: localize("SFC.Toolbar.Settings"), class: "sfc-settings", icon: "fa-solid fa-gear", onclick: () => void openModuleSettings()});
+  async _renderFrame(options) {
+    const frame = await super._renderFrame(options);
+    const close = frame?.querySelector?.('.window-header [data-action="close"]');
+    if ( close && hasOwnSettings() ) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "header-control icon fa-solid fa-gear";
+      button.dataset.action = "openSettings";
+      close.before(button);
+      this.#settingsButton = button;
+      this.#labelSettingsButton();
     }
-    return buttons;
+    return frame;
   }
 
-  async getData() {
+  // Labelled again on every render, the commander can switch its language while it is open.
+  #labelSettingsButton() {
+    const button = this.#settingsButton;
+    if ( !button ) return;
+    const label = localize("SFC.Toolbar.Settings");
+    button.dataset.tooltip = label;
+    button.setAttribute("aria-label", label);
+  }
+
+  async _prepareContext(_options) {
     await this.#ensurePaneLoaded("left");
     await this.#ensurePaneLoaded("right");
 
@@ -337,31 +372,32 @@ class SFCFileCommanderApp extends Application {
     };
   }
 
-  activateListeners(html) {
-    super.activateListeners(html);
+  // The window element stays across renders, so the keyboard listener is added once.
+  _onFirstRender(context, options) {
+    super._onFirstRender?.(context, options);
+    this.element.tabIndex = 0;
+    this.element.addEventListener("keydown", event => void this.#onKeyDown(event));
+  }
 
-    const app = html.find(".sfc-app");
-    html.attr("tabindex", "0");
-    app.attr("tabindex", "0");
-    window.setTimeout(() => {
-      html.trigger("focus");
-      app.trigger("focus");
-    }, 0);
-
-    html.on("keydown", this.#onKeyDown.bind(this));
-    app.on("keydown", this.#onKeyDown.bind(this));
-    html.find(".sfc-pane").on("mousedown", event => this.#onPaneMouseDown(event));
-    html.find("[data-action='view'], [data-action='copy'], [data-action='upload'], [data-action='mkdir'], [data-action='refresh'], [data-action='switch-pane'], [data-action='copy-path']").on("click", event => this.#onToolbarAction(event));
-    html.find(".sfc-path-row").on("submit", this.#onPathSubmit.bind(this));
-    html.find("select[name='source']").on("change", event => this.#onSourceChange(event));
-    html.find("select[name='bucket']").on("change", event => this.#onBucketChange(event));
-    html.find(".sfc-entry").on("click", event => this.#onEntryClick(event));
-    html.find(".sfc-entry").on("dblclick", event => this.#onEntryDoubleClick(event));
+  // Every render replaces the content, so its listeners are added again.
+  _onRender(context, options) {
+    super._onRender?.(context, options);
+    const root = this.element;
+    this.#labelSettingsButton();
+    for ( const pane of root.querySelectorAll(".sfc-pane") ) pane.addEventListener("mousedown", event => this.#onPaneMouseDown(event));
+    for ( const form of root.querySelectorAll(".sfc-path-row") ) form.addEventListener("submit", event => void this.#onPathSubmit(event));
+    for ( const select of root.querySelectorAll("select[name='source']") ) select.addEventListener("change", event => void this.#onSourceChange(event));
+    for ( const select of root.querySelectorAll("select[name='bucket']") ) select.addEventListener("change", event => void this.#onBucketChange(event));
+    for ( const entry of root.querySelectorAll(".sfc-entry") ) {
+      entry.addEventListener("click", event => void this.#onEntryClick(event));
+      entry.addEventListener("dblclick", event => void this.#onEntryDoubleClick(event));
+    }
 
     // A render rebuilds both lists scrolled to the top, so bring the selected rows back into view.
     window.setTimeout(() => {
-      html.find(".sfc-entry.is-selected").each((_, row) => row.scrollIntoView?.({block: "nearest"}));
+      for ( const row of root.querySelectorAll(".sfc-entry.is-selected") ) row.scrollIntoView?.({block: "nearest"});
     }, 0);
+    this.#focusAppElement();
   }
 
   async close(options) {
@@ -412,11 +448,11 @@ class SFCFileCommanderApp extends Application {
 
   #ensurePaneDefaults(side) {
     const availableStorage = this.#storageOptions();
-    const pane = this.state.panes[side] ?? {};
+    const pane = this.session.panes[side] ?? {};
     const defaultSource = configuredDefaultSource(side, availableStorage);
     const source = availableStorage.includes(pane.source) ? pane.source : defaultSource;
 
-    this.state.panes[side] = {
+    this.session.panes[side] = {
       source,
       bucket: pane.bucket ?? this.#defaultBucket(),
       path: normalizePath(pane.path),
@@ -432,7 +468,7 @@ class SFCFileCommanderApp extends Application {
   async #saveState() {
     if ( !game.settings.get(MODULE_ID, RESTORE_STATE_SETTING) ) return;
     const payload = {
-      activePane: this.state.activePane,
+      activePane: this.session.activePane,
       panes: {
         left: this.#extractPersistedPane("left"),
         right: this.#extractPersistedPane("right")
@@ -442,7 +478,7 @@ class SFCFileCommanderApp extends Application {
   }
 
   #extractPersistedPane(side) {
-    const pane = this.state.panes[side];
+    const pane = this.session.panes[side];
     return {
       source: pane.source,
       bucket: pane.bucket,
@@ -452,10 +488,10 @@ class SFCFileCommanderApp extends Application {
   }
 
   #serializePane(side) {
-    const pane = this.state.panes[side];
+    const pane = this.session.panes[side];
     return {
       title: this.#paneTitle(side),
-      activeClass: this.state.activePane === side ? "is-active" : "",
+      activeClass: this.session.activePane === side ? "is-active" : "",
       storageLabel: storageLabel(pane.source),
       path: pane.path || "/",
       error: pane.error ? `${localize("SFC.Pane.ErrorPrefix")}: ${pane.error}` : "",
@@ -490,7 +526,7 @@ class SFCFileCommanderApp extends Application {
   }
 
   #getActivePaneKey() {
-    return this.state.activePane === "right" ? "right" : "left";
+    return this.session.activePane === "right" ? "right" : "left";
   }
 
   #getOtherPaneKey() {
@@ -498,12 +534,12 @@ class SFCFileCommanderApp extends Application {
   }
 
   #getSelectedEntry(side) {
-    const pane = this.state.panes[side];
+    const pane = this.session.panes[side];
     return pane.entries.find(entry => entry.path === pane.selectedPath) ?? null;
   }
 
   #getSelectedIndex(side) {
-    const pane = this.state.panes[side];
+    const pane = this.session.panes[side];
     return pane.entries.findIndex(entry => entry.path === pane.selectedPath);
   }
 
@@ -524,13 +560,13 @@ class SFCFileCommanderApp extends Application {
   }
 
   async #ensurePaneLoaded(side) {
-    const pane = this.state.panes[side];
+    const pane = this.session.panes[side];
     if ( pane.loaded ) return;
     await this.#browsePane(side, pane.path, {keepSelection: true});
   }
 
   async #browsePane(side, path, {keepSelection = false} = {}) {
-    const pane = this.state.panes[side];
+    const pane = this.session.panes[side];
     const target = normalizePath(toStoragePath(pane.source, path));
 
     try {
@@ -614,9 +650,9 @@ class SFCFileCommanderApp extends Application {
     return entries.concat(directories, files);
   }
 
-  async #onToolbarAction(event) {
+  async _onToolbarAction(event, target) {
     event.preventDefault();
-    const action = event.currentTarget.dataset.action;
+    const action = target.dataset.action;
 
     try {
       if ( action === "view" ) await this.#viewSelection();
@@ -639,7 +675,7 @@ class SFCFileCommanderApp extends Application {
     if ( target instanceof HTMLElement && target.closest("input, textarea, select") ) return;
     const side = event.currentTarget.dataset.pane;
     if ( side !== "left" && side !== "right" ) return;
-    this.state.activePane = side;
+    this.session.activePane = side;
     this.#syncSelectionDisplay();
   }
 
@@ -648,11 +684,11 @@ class SFCFileCommanderApp extends Application {
     const form = event.currentTarget;
     const side = form.dataset.pane;
     const input = form.querySelector("input[name='path']");
-    this.state.activePane = side;
+    this.session.activePane = side;
 
     try {
       await this.#browsePane(side, input?.value ?? "");
-      this.render(false);
+      this.render();
     } catch (error) {
       this.#notifyError(error);
     }
@@ -660,37 +696,37 @@ class SFCFileCommanderApp extends Application {
 
   async #onSourceChange(event) {
     const side = event.currentTarget.dataset.pane;
-    const pane = this.state.panes[side];
+    const pane = this.session.panes[side];
     pane.source = event.currentTarget.value;
     pane.bucket = pane.source === "s3" ? (pane.bucket || this.#defaultBucket()) : "";
     pane.path = "";
     pane.loaded = false;
     pane.selectedPath = "";
-    this.state.activePane = side;
+    this.session.activePane = side;
 
     await this.#browsePane(side, "");
-    this.render(false);
+    this.render();
   }
 
   async #onBucketChange(event) {
     const side = event.currentTarget.dataset.pane;
-    const pane = this.state.panes[side];
+    const pane = this.session.panes[side];
     pane.bucket = event.currentTarget.value;
     pane.path = "";
     pane.loaded = false;
     pane.selectedPath = "";
-    this.state.activePane = side;
+    this.session.activePane = side;
 
     await this.#browsePane(side, "");
-    this.render(false);
+    this.render();
   }
 
   async #onEntryClick(event) {
     event.preventDefault();
     const button = event.currentTarget;
     const side = button.dataset.pane;
-    this.state.panes[side].selectedPath = button.dataset.path;
-    this.state.activePane = side;
+    this.session.panes[side].selectedPath = button.dataset.path;
+    this.session.activePane = side;
     this.#applySelectionChange();
   }
 
@@ -699,8 +735,8 @@ class SFCFileCommanderApp extends Application {
     const button = event.currentTarget;
     const side = button.dataset.pane;
     const path = button.dataset.path;
-    this.state.activePane = side;
-    this.state.panes[side].selectedPath = path;
+    this.session.activePane = side;
+    this.session.panes[side].selectedPath = path;
 
     try {
       await this.#activateSelectedEntry(side);
@@ -748,22 +784,22 @@ class SFCFileCommanderApp extends Application {
 
     if ( event.key === "End" ) {
       consumeKeyEvent(event);
-      this.#selectAbsoluteIndex(activePane, this.state.panes[activePane].entries.length - 1);
+      this.#selectAbsoluteIndex(activePane, this.session.panes[activePane].entries.length - 1);
       this.#applySelectionChange();
       return;
     }
 
     if ( event.key === "Backspace" ) {
       consumeKeyEvent(event);
-      await this.#browsePane(activePane, parentPath(this.state.panes[activePane].path));
-      this.render(false);
+      await this.#browsePane(activePane, parentPath(this.session.panes[activePane].path));
+      this.render();
       return;
     }
 
     if ( event.key === "ArrowLeft" ) {
       consumeKeyEvent(event);
-      await this.#browsePane(activePane, parentPath(this.state.panes[activePane].path));
-      this.render(false);
+      await this.#browsePane(activePane, parentPath(this.session.panes[activePane].path));
+      this.render();
       return;
     }
 
@@ -855,22 +891,22 @@ class SFCFileCommanderApp extends Application {
   }
 
   #moveSelection(side, delta) {
-    const entries = this.state.panes[side].entries;
+    const entries = this.session.panes[side].entries;
     if ( !entries.length ) return;
     const currentIndex = Math.max(0, this.#getSelectedIndex(side));
     const nextIndex = Math.min(entries.length - 1, Math.max(0, currentIndex + delta));
-    this.state.panes[side].selectedPath = entries[nextIndex].path;
+    this.session.panes[side].selectedPath = entries[nextIndex].path;
   }
 
   #selectAbsoluteIndex(side, index) {
-    const entries = this.state.panes[side].entries;
+    const entries = this.session.panes[side].entries;
     if ( !entries.length ) return;
     const safeIndex = Math.min(entries.length - 1, Math.max(0, index));
-    this.state.panes[side].selectedPath = entries[safeIndex].path;
+    this.session.panes[side].selectedPath = entries[safeIndex].path;
   }
 
   #switchPane() {
-    this.state.activePane = this.#getOtherPaneKey();
+    this.session.activePane = this.#getOtherPaneKey();
   }
 
   // Updates the rendered rows in place. A full render would reset the scroll position of long lists.
@@ -881,34 +917,35 @@ class SFCFileCommanderApp extends Application {
 
   #syncSelectionDisplay({scroll = false} = {}) {
     const root = this.element;
-    if ( !root?.length ) return;
+    if ( !root ) return;
 
     const activePane = this.#getActivePaneKey();
 
-    root.find(".sfc-pane").removeClass("is-active");
-    root.find(`.sfc-pane[data-pane='${activePane}']`).addClass("is-active");
+    for ( const pane of root.querySelectorAll(".sfc-pane") ) pane.classList.toggle("is-active", pane.dataset.pane === activePane);
 
     for ( const side of ["left", "right"] ) {
-      const rows = root.find(`.sfc-pane[data-pane='${side}']`).find(".sfc-entry");
-      rows.removeClass("is-selected");
-      const selected = rows.filter((_, element) => element.dataset.path === this.state.panes[side].selectedPath).addClass("is-selected");
-      if ( scroll && side === activePane ) selected.get(0)?.scrollIntoView?.({block: "nearest"});
+      const selectedPath = this.session.panes[side].selectedPath;
+      for ( const row of root.querySelectorAll(`.sfc-pane[data-pane='${side}'] .sfc-entry`) ) {
+        const selected = row.dataset.path === selectedPath;
+        row.classList.toggle("is-selected", selected);
+        if ( selected && scroll && side === activePane ) row.scrollIntoView?.({block: "nearest"});
+      }
     }
 
     const status = this.#statusText();
-    root.find(".sfc-status-line").text(status).attr("title", status);
+    const statusLine = root.querySelector(".sfc-status-line");
+    if ( statusLine ) {
+      statusLine.textContent = status;
+      statusLine.setAttribute("title", status);
+    }
     this.#focusAppElement();
   }
 
+  // The keys only reach the commander while focus is inside it, so it takes the focus after every change.
   #focusAppElement() {
-    const root = this.element;
-    const app = root?.find(".sfc-app");
-    if ( root?.length || app?.length ) {
-      window.setTimeout(() => {
-        root?.trigger("focus");
-        app?.trigger("focus");
-      }, 0);
-    }
+    const app = this.element?.querySelector(".sfc-app");
+    if ( !app ) return;
+    window.setTimeout(() => app.focus?.({preventScroll: true}), 0);
   }
 
   async #activateSelectedEntry(side) {
@@ -917,7 +954,7 @@ class SFCFileCommanderApp extends Application {
 
     if ( selected.type === "directory" ) {
       await this.#browsePane(side, selected.path, {keepSelection: false});
-      this.render(false);
+      this.render();
       return;
     }
 
@@ -987,17 +1024,17 @@ class SFCFileCommanderApp extends Application {
   }
 
   async #refreshPanes() {
-    await this.#browsePane("left", this.state.panes.left.path, {keepSelection: true});
-    await this.#browsePane("right", this.state.panes.right.path, {keepSelection: true});
-    this.render(false);
+    await this.#browsePane("left", this.session.panes.left.path, {keepSelection: true});
+    await this.#browsePane("right", this.session.panes.right.path, {keepSelection: true});
+    this.render();
   }
 
   async #copySelectionToOtherPane() {
     if ( !this.#ensureUploadPermission() ) return;
     const sourceSide = this.#getActivePaneKey();
     const targetSide = this.#getOtherPaneKey();
-    const sourcePane = this.state.panes[sourceSide];
-    const targetPane = this.state.panes[targetSide];
+    const sourcePane = this.session.panes[sourceSide];
+    const targetPane = this.session.panes[targetSide];
     const selection = this.#getSelectedEntry(sourceSide);
 
     if ( !selection ) throw new Error(localize("SFC.Notification.NoSelection"));
@@ -1015,7 +1052,7 @@ class SFCFileCommanderApp extends Application {
     const finishedKey = run.cancelled ? "SFC.Notification.CopyCancelled" : "SFC.Notification.CopyFinished";
     ui.notifications?.info(localize(finishedKey, {name: selection.label}));
     this.#notifySkipped(run);
-    this.render(false);
+    this.render();
   }
 
   async #copyEntry(entry, sourcePane, targetPane, targetDirectory, run) {
@@ -1106,7 +1143,7 @@ class SFCFileCommanderApp extends Application {
   async #createDirectoryInActivePane() {
     if ( !this.#ensureUploadPermission() ) return;
     const side = this.#getActivePaneKey();
-    const pane = this.state.panes[side];
+    const pane = this.session.panes[side];
     if ( !this.#paneSupportsWrite(pane) ) throw new Error(localize("SFC.Notification.CopyUnsupported"));
 
     const directoryName = await foundry.applications.api.DialogV2.prompt({
@@ -1131,13 +1168,13 @@ class SFCFileCommanderApp extends Application {
     countFeature(MODULE_ID, "folderCreated");
     await this.#browsePane(side, pane.path, {keepSelection: true});
     ui.notifications?.info(localize("SFC.Notification.DirectoryCreated", {name: directoryName}));
-    this.render(false);
+    this.render();
   }
 
   async #uploadIntoActivePane() {
     if ( !this.#ensureUploadPermission() ) return;
     const side = this.#getActivePaneKey();
-    const pane = this.state.panes[side];
+    const pane = this.session.panes[side];
     if ( !this.#paneSupportsWrite(pane) ) throw new Error(localize("SFC.Notification.CopyUnsupported"));
 
     const files = await chooseFiles();
@@ -1163,7 +1200,7 @@ class SFCFileCommanderApp extends Application {
     const finishedKey = run.cancelled ? "SFC.Notification.UploadCancelled" : "SFC.Notification.UploadFinished";
     ui.notifications?.info(localize(finishedKey, {count: uploaded}));
     this.#notifySkipped(run);
-    this.render(false);
+    this.render();
   }
 
   #notifyError(error) {
@@ -1242,10 +1279,8 @@ async function ensureModuleTranslationsLoaded() {
 }
 
 function refreshLocalizedUi() {
-  if ( fileCommanderApp ) {
-    fileCommanderApp.options.title = localize("SFC.Title");
-    fileCommanderApp.render(true);
-  }
+  // The frame keeps its title through a normal render, so it gets the new one explicitly.
+  if ( fileCommanderApp?.rendered ) void fileCommanderApp.render({window: {title: localize("SFC.Title")}});
 
   ui.controls?.render?.({ reset: true });
 }
@@ -1570,6 +1605,7 @@ export const __test__ = {
   toggleFileCommanderFromSceneControl,
   openFileCommander,
   SFCOpenMenu,
+  SFCSelfTestMenu,
   SFCFileCommanderApp,
   localize,
   normalizeUiLanguage,

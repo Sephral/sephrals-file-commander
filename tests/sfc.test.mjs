@@ -7,6 +7,7 @@ import {
   createTestEnvironment,
   flushPromises,
   modulePath,
+  renderInto,
   TestElement
 } from "./helpers/test-helpers.mjs";
 
@@ -125,6 +126,15 @@ test("scene control toggle closes open window and ignores false activations", as
 
     await __test__.toggleFileCommanderFromSceneControl();
     assert.equal(closeCount, 2);
+
+    // A window that is still opening stays open when the tool reports the same click again (v13).
+    const opening = __test__.openFileCommander();
+    opening.rendered = false;
+    await __test__.toggleFileCommanderFromSceneControl();
+    assert.equal(closeCount, 2);
+    opening.rendered = true;
+    await __test__.toggleFileCommanderFromSceneControl();
+    assert.equal(closeCount, 3);
   } finally {
     __test__.SFCFileCommanderApp.prototype.render = originalRender;
     __test__.SFCFileCommanderApp.prototype.close = originalClose;
@@ -190,7 +200,7 @@ test("language helpers follow the setting and refresh the open commander", async
   languageSetting.data.onChange("de");
   await flushPromises();
 
-  assert.equal(app.options.title, "Datei-Kommandant");
+  assert.equal(app.title, "Datei-Kommandant");
   assert.equal(__test__.localize("SFC.Settings.Menu.Label"), "Kommandant öffnen");
   assert.equal(app.renderCalls.length, baselineRenderCount + 1);
   assert.deepEqual(env.state.controlRenders.at(-1), { reset: true });
@@ -254,16 +264,15 @@ test("F8 stays a disabled placeholder on v13 and v14 and the commander never del
     setBrowseResult("data", "", { target: "", dirs: [], files: ["source.txt"] });
 
     const app = new __test__.SFCFileCommanderApp();
-    const data = await app.getData();
+    const data = await app._prepareContext();
     const deleteCommand = data.commandBar.find((entry) => entry.key === "F8");
     assert.equal(deleteCommand?.disabled, true);
     assert.equal(deleteCommand?.action, undefined);
 
     const harness = createHtmlHarness();
-    app.element = harness.root;
-    app.activateListeners(harness.root);
-    app.state.activePane = "left";
-    app.state.panes.left.selectedPath = "source.txt";
+    renderInto(app, harness);
+    app.session.activePane = "left";
+    app.session.panes.left.selectedPath = "source.txt";
     const event = harness.controls.app.trigger("keydown", { key: "F8" });
     await flushPromises();
     assert.equal(event.defaultPrevented, undefined);
@@ -291,7 +300,7 @@ test("opening needs the browse permission and write commands need the upload per
 
   const app = __test__.openFileCommander();
   assert.notEqual(app, null);
-  const data = await app.getData();
+  const data = await app._prepareContext();
   const command = (key) => data.commandBar.find((entry) => entry.key === key);
   for ( const key of ["F5", "F7", "Ctrl+U"] ) {
     assert.equal(command(key).disabled, true, key);
@@ -302,12 +311,11 @@ test("opening needs the browse permission and write commands need the upload per
   assert.equal(command("Ctrl+C").action, "copy-path");
 
   const harness = createHtmlHarness();
-  app.element = harness.root;
-  app.activateListeners(harness.root);
-  app.state.activePane = "left";
-  app.state.panes.left.selectedPath = "source.txt";
-  app.state.panes.right.source = "data";
-  app.state.panes.right.path = "target";
+  renderInto(app, harness);
+  app.session.activePane = "left";
+  app.session.panes.left.selectedPath = "source.txt";
+  app.session.panes.right.source = "data";
+  app.session.panes.right.path = "target";
   env.state.promptValue = "blocked-folder";
 
   harness.controls.app.trigger("keydown", { key: "F5" });
@@ -323,7 +331,7 @@ test("opening needs the browse permission and write commands need the upload per
 
   // With the permission the full command bar comes back.
   env.state.permissions.FILES_UPLOAD = true;
-  const allowed = await app.getData();
+  const allowed = await app._prepareContext();
   assert.equal(allowed.commandBar.find((entry) => entry.key === "F5").action, "copy");
   assert.equal(allowed.commandBar.length, 9);
   await app.close({ force: true });
@@ -350,14 +358,14 @@ test("application getData loads panes, serializes entries, and handles browse er
   setBrowseResult("public", "", new Error("browse failed"));
 
   const app = new __test__.SFCFileCommanderApp();
-  const data = await app.getData();
+  const data = await app._prepareContext();
   assert.equal(data.labels.copy, "Copy");
   assert.equal(data.panes.left.entries.length, 2);
   assert.equal(data.panes.left.entries[0].label, "[folder-a]");
   assert.match(data.panes.right.error, /browse failed/);
-  assert.equal(app.state.panes.left.selectedPath, "folder-a");
-  assert.equal(app.state.panes.right.loaded, true);
-  assert.equal(__test__.SFCFileCommanderApp.defaultOptions.template.includes("file-commander.html"), true);
+  assert.equal(app.session.panes.left.selectedPath, "folder-a");
+  assert.equal(app.session.panes.right.loaded, true);
+  assert.equal(__test__.SFCFileCommanderApp.PARTS.main.template.includes("file-commander.html"), true);
 });
 
 test("activateListeners wires pane, path, source, bucket, entry, toolbar, and navigation flows", async () => {
@@ -371,74 +379,73 @@ test("activateListeners wires pane, path, source, bucket, entry, toolbar, and na
   setBrowseResult("s3", "", { target: "", dirs: [], files: [] }, "bucket-b");
 
   const app = new __test__.SFCFileCommanderApp();
-  await app.getData();
+  await app._prepareContext();
   const harness = createHtmlHarness();
-  app.element = harness.root;
-  app.activateListeners(harness.root);
+  renderInto(app, harness);
 
   harness.controls.leftPane.trigger("mousedown", { target: new TestElement() });
-  assert.equal(app.state.activePane, "left");
+  assert.equal(app.session.activePane, "left");
 
   harness.controls.leftInput.value = "left/path";
   harness.controls.leftForm.trigger("submit");
   await flushPromises();
-  assert.equal(app.state.panes.left.path, "left/path");
+  assert.equal(app.session.panes.left.path, "left/path");
 
   harness.controls.leftSource.value = "s3";
   harness.controls.leftSource.trigger("change");
   await flushPromises();
-  assert.equal(app.state.panes.left.source, "s3");
-  assert.equal(app.state.panes.left.bucket, "bucket-a");
+  assert.equal(app.session.panes.left.source, "s3");
+  assert.equal(app.session.panes.left.bucket, "bucket-a");
 
   harness.controls.leftBucket.value = "bucket-b";
   harness.controls.leftBucket.trigger("change");
   await flushPromises();
-  assert.equal(app.state.panes.left.bucket, "bucket-b");
+  assert.equal(app.session.panes.left.bucket, "bucket-b");
 
   harness.controls.leftEntry.dataset.path = "folder-a";
   harness.controls.leftEntry.trigger("click");
   await flushPromises();
-  assert.equal(app.state.panes.left.selectedPath, "folder-a");
+  assert.equal(app.session.panes.left.selectedPath, "folder-a");
 
-  app.state.panes.left.source = "data";
-  app.state.panes.left.bucket = "";
-  app.state.panes.left.entries = [
+  app.session.panes.left.source = "data";
+  app.session.panes.left.bucket = "";
+  app.session.panes.left.entries = [
     { path: "folder-a", label: "[folder-a]", name: "folder-a", type: "directory", isParent: false }
   ];
   harness.controls.leftEntry.trigger("dblclick");
   await flushPromises();
-  assert.equal(app.state.panes.left.path, "folder-a");
+  assert.equal(app.session.panes.left.path, "folder-a");
 
-  app.state.panes.left.entries = [
+  app.session.panes.left.entries = [
     { path: "", label: "[..]", name: "..", type: "directory", isParent: true },
     { path: "folder-a", label: "[folder-a]", name: "folder-a", type: "directory", isParent: false },
     { path: "file-a.txt", label: "file-a.txt", name: "file-a.txt", type: "file", isParent: false }
   ];
-  app.state.panes.left.selectedPath = "folder-a";
-  app.state.panes.right.entries = [{ path: "beta.txt", label: "beta.txt", name: "beta.txt", type: "file", isParent: false }];
-  app.state.panes.right.selectedPath = "beta.txt";
-  app.state.activePane = "left";
+  app.session.panes.left.selectedPath = "folder-a";
+  app.session.panes.right.entries = [{ path: "beta.txt", label: "beta.txt", name: "beta.txt", type: "file", isParent: false }];
+  app.session.panes.right.selectedPath = "beta.txt";
+  app.session.activePane = "left";
   harness.controls.viewButton.trigger("click");
   await flushPromises();
   assert.equal(env.state.windowOpenCalls.length >= 0, true);
 
   harness.controls.switchButton.trigger("click");
   await flushPromises();
-  assert.equal(app.state.activePane, "right");
+  assert.equal(app.session.activePane, "right");
 
   harness.controls.refreshButton.trigger("click");
   await flushPromises();
 
   harness.controls.app.trigger("keydown", { key: "Tab" });
   await flushPromises();
-  app.state.activePane = "left";
-  app.state.panes.left.entries = [
+  app.session.activePane = "left";
+  app.session.panes.left.entries = [
     { path: "", label: "[..]", name: "..", type: "directory", isParent: true },
     { path: "folder-a", label: "[folder-a]", name: "folder-a", type: "directory", isParent: false },
     { path: "file-a.txt", label: "file-a.txt", name: "file-a.txt", type: "file", isParent: false }
   ];
-  app.state.panes.left.selectedPath = "file-a.txt";
-  app.state.panes.left.path = "folder-a";
+  app.session.panes.left.selectedPath = "file-a.txt";
+  app.session.panes.left.path = "folder-a";
   harness.controls.app.trigger("keydown", { key: "ArrowDown" });
   await flushPromises();
   harness.controls.app.trigger("keydown", { key: "ArrowUp" });
@@ -449,19 +456,19 @@ test("activateListeners wires pane, path, source, bucket, entry, toolbar, and na
   await flushPromises();
   harness.controls.app.trigger("keydown", { key: "Backspace" });
   await flushPromises();
-  app.state.panes.left.path = "folder-a";
+  app.session.panes.left.path = "folder-a";
   harness.controls.app.trigger("keydown", { key: "ArrowLeft" });
   await flushPromises();
-  app.state.panes.left.entries = [{ path: "file-a.txt", label: "file-a.txt", name: "file-a.txt", type: "file", isParent: false }];
-  app.state.panes.left.selectedPath = "file-a.txt";
+  app.session.panes.left.entries = [{ path: "file-a.txt", label: "file-a.txt", name: "file-a.txt", type: "file", isParent: false }];
+  app.session.panes.left.selectedPath = "file-a.txt";
   harness.controls.app.trigger("keydown", { key: "ArrowRight" });
   await flushPromises();
   harness.controls.app.trigger("keydown", { key: "Enter" });
   await flushPromises();
   harness.controls.app.trigger("keydown", { key: "F3" });
   await flushPromises();
-  app.state.panes.right.source = "data";
-  app.state.panes.right.path = "target";
+  app.session.panes.right.source = "data";
+  app.session.panes.right.path = "target";
   harness.controls.app.trigger("keydown", { key: "F5" });
   await flushPromises();
   env.state.promptValue = "kbd-folder";
@@ -484,23 +491,22 @@ test("copy, upload, mkdir, view, open, and error paths are exercised through the
     setBrowseResult("public", "", { target: "", dirs: [], files: [] });
 
     const app = new __test__.SFCFileCommanderApp();
-    await app.getData();
-    app.state.activePane = "left";
-    app.state.panes.left.selectedPath = "source.txt";
-    app.state.panes.left.entries = [
+    await app._prepareContext();
+    app.session.activePane = "left";
+    app.session.panes.left.selectedPath = "source.txt";
+    app.session.panes.left.entries = [
       { path: "source.txt", label: "source.txt", name: "source.txt", type: "file", isParent: false }
     ];
-    app.state.panes.right.source = "data";
-    app.state.panes.right.path = "target";
-    app.state.panes.right.bucket = "";
-    app.state.panes.right.entries = [];
+    app.session.panes.right.source = "data";
+    app.session.panes.right.path = "target";
+    app.session.panes.right.bucket = "";
+    app.session.panes.right.entries = [];
 
     const harness = createHtmlHarness();
-    app.element = harness.root;
-    app.activateListeners(harness.root);
+    renderInto(app, harness);
 
-    app.state.panes.left.selectedPath = "dir-a";
-    app.state.panes.left.entries = [
+    app.session.panes.left.selectedPath = "dir-a";
+    app.session.panes.left.entries = [
       { path: "dir-a", label: "[dir-a]", name: "dir-a", type: "directory", isParent: false }
     ];
     setBrowseResult("data", "dir-a", { target: "dir-a", dirs: ["dir-a/subdir"], files: ["dir-a/child.txt"] });
@@ -529,7 +535,7 @@ test("copy, upload, mkdir, view, open, and error paths are exercised through the
     await flushPromises();
     assert.equal(env.state.notifications.info.includes("cancelled"), true);
 
-    app.state.panes.left.selectedPath = "";
+    app.session.panes.left.selectedPath = "";
     harness.controls.viewButton.trigger("click");
     await flushPromises();
     assert.equal(env.state.notifications.error.at(-1), "error no selection");
@@ -540,34 +546,33 @@ test("helper branches cover same-target, non-writable target, fetch failures, di
   await withoutConsoleError(async () => {
     setBrowseResult("data", "", { target: "", dirs: [], files: ["source.txt"] });
     const app = new __test__.SFCFileCommanderApp();
-    await app.getData();
+    await app._prepareContext();
 
-    app.state.activePane = "left";
-    app.state.panes.left.selectedPath = "source.txt";
-    app.state.panes.left.entries = [
+    app.session.activePane = "left";
+    app.session.panes.left.selectedPath = "source.txt";
+    app.session.panes.left.entries = [
       { path: "source.txt", label: "source.txt", name: "source.txt", type: "file", isParent: false }
     ];
-    app.state.panes.right.entries = [];
-    app.state.panes.right.selectedPath = "";
-    app.state.panes.right.source = "public";
-    app.state.panes.right.path = "";
+    app.session.panes.right.entries = [];
+    app.session.panes.right.selectedPath = "";
+    app.session.panes.right.source = "public";
+    app.session.panes.right.path = "";
 
     const harness = createHtmlHarness();
-    app.element = harness.root;
-    app.activateListeners(harness.root);
+    renderInto(app, harness);
     harness.controls.copyButton.trigger("click");
     await flushPromises();
     assert.equal(env.state.notifications.error.at(-1), "error no writable target");
 
-    app.state.panes.right.source = "data";
-    app.state.panes.right.path = "";
-    app.state.panes.left.path = "";
+    app.session.panes.right.source = "data";
+    app.session.panes.right.path = "";
+    app.session.panes.left.path = "";
     harness.controls.copyButton.trigger("click");
     await flushPromises();
     assert.equal(env.state.notifications.error.at(-1), "error same target");
 
     globalThis.fetch = async () => ({ ok: false });
-    app.state.panes.right.path = "target";
+    app.session.panes.right.path = "target";
     harness.controls.copyButton.trigger("click");
     await flushPromises();
     assert.equal(env.state.notifications.error.at(-1), "error fetch failed");
@@ -583,12 +588,12 @@ test("helper branches cover same-target, non-writable target, fetch failures, di
     await flushPromises();
     assert.equal(env.state.notifications.error.at(-1), "error boom");
 
-    app.state.panes.left.source = "s3";
-    app.state.panes.left.bucket = "";
+    app.session.panes.left.source = "s3";
+    app.session.panes.left.bucket = "";
     harness.controls.leftInput.value = "needs-bucket";
     harness.controls.leftForm.trigger("submit");
     await flushPromises();
-    assert.equal(app.state.panes.left.error, "missing bucket");
+    assert.equal(app.session.panes.left.error, "missing bucket");
 
     harness.controls.leftForm.dataset.pane = "missing";
     harness.controls.leftForm.trigger("submit");
@@ -599,9 +604,9 @@ test("helper branches cover same-target, non-writable target, fetch failures, di
     window.open = () => {
       throw new Error("open failed");
     };
-    app.state.panes.left.source = "data";
-    app.state.panes.left.entries = [{ path: "source.txt", label: "source.txt", name: "source.txt", type: "file", isParent: false }];
-    app.state.panes.left.selectedPath = "source.txt";
+    app.session.panes.left.source = "data";
+    app.session.panes.left.entries = [{ path: "source.txt", label: "source.txt", name: "source.txt", type: "file", isParent: false }];
+    app.session.panes.left.selectedPath = "source.txt";
     harness.controls.leftEntry.dataset.path = "source.txt";
     harness.controls.leftEntry.trigger("dblclick");
     await flushPromises();
@@ -614,12 +619,12 @@ test("close persists pane state when restore is enabled and skips when disabled"
   setBrowseResult("data", "", { target: "", dirs: [], files: [] });
   setBrowseResult("public", "", { target: "", dirs: [], files: [] });
   const app = new __test__.SFCFileCommanderApp();
-  await app.getData();
-  app.state.activePane = "right";
-  app.state.panes.left.path = "left";
-  app.state.panes.left.selectedPath = "left/file.txt";
-  app.state.panes.right.path = "right";
-  app.state.panes.right.selectedPath = "right/file.txt";
+  await app._prepareContext();
+  app.session.activePane = "right";
+  app.session.panes.left.path = "left";
+  app.session.panes.left.selectedPath = "left/file.txt";
+  app.session.panes.right.path = "right";
+  app.session.panes.right.selectedPath = "right/file.txt";
   await app.close({ force: true });
   assert.equal(env.state.settingWrites.at(-1).key, __test__.STATE_SETTING);
 
@@ -636,13 +641,12 @@ test("keyboard shortcut catch branches surface errors through notifications", as
     setBrowseResult("public", "", { target: "", dirs: [], files: [] });
 
     const app = new __test__.SFCFileCommanderApp();
-    await app.getData();
+    await app._prepareContext();
     const harness = createHtmlHarness();
-    app.element = harness.root;
-    app.activateListeners(harness.root);
-    app.state.activePane = "left";
-    app.state.panes.left.entries = [{ path: "source.txt", label: "source.txt", name: "source.txt", type: "file", isParent: false }];
-    app.state.panes.left.selectedPath = "source.txt";
+    renderInto(app, harness);
+    app.session.activePane = "left";
+    app.session.panes.left.entries = [{ path: "source.txt", label: "source.txt", name: "source.txt", type: "file", isParent: false }];
+    app.session.panes.left.selectedPath = "source.txt";
 
     const originalOpen = window.open;
     window.open = () => {
@@ -654,24 +658,24 @@ test("keyboard shortcut catch branches surface errors through notifications", as
     await flushPromises();
     window.open = originalOpen;
 
-    app.state.panes.left.selectedPath = "";
+    app.session.panes.left.selectedPath = "";
     harness.controls.app.trigger("keydown", { key: "F3" });
     await flushPromises();
 
-    app.state.panes.left.selectedPath = "source.txt";
-    app.state.panes.right.source = "public";
+    app.session.panes.left.selectedPath = "source.txt";
+    app.session.panes.right.source = "public";
     harness.controls.app.trigger("keydown", { key: "F5" });
     await flushPromises();
 
-    app.state.activePane = "right";
+    app.session.activePane = "right";
     harness.controls.app.trigger("keydown", { key: "F7" });
     await flushPromises();
 
-    app.state.panes.left = undefined;
+    app.session.panes.left = undefined;
     harness.controls.app.trigger("keydown", { key: "r", ctrlKey: true });
     await flushPromises();
 
-    app.state.activePane = "right";
+    app.session.activePane = "right";
     harness.controls.app.trigger("keydown", { key: "u", ctrlKey: true });
     await flushPromises();
 
@@ -728,10 +732,10 @@ test("on The Forge the commander browses, copies, uploads, and creates folders i
   setBrowseResult("public", "", { target: "", dirs: [], files: [] });
 
   const app = new __test__.SFCFileCommanderApp();
-  assert.equal(app.state.panes.left.source, "forgevtt");
-  assert.equal(app.state.panes.right.source, "public");
+  assert.equal(app.session.panes.left.source, "forgevtt");
+  assert.equal(app.session.panes.right.source, "public");
 
-  const data = await app.getData();
+  const data = await app._prepareContext();
   assert.equal(data.panes.left.storageLabel, "Assets Library");
   assert.deepEqual(data.panes.left.sourceOptions.map((option) => option.value), ["forgevtt", "data", "public", "s3"]);
   assert.equal(data.panes.left.sourceOptions[0].selected, true);
@@ -748,14 +752,13 @@ test("on The Forge the commander browses, copies, uploads, and creates folders i
   };
 
   const harness = createHtmlHarness();
-  app.element = harness.root;
-  app.activateListeners(harness.root);
+  renderInto(app, harness);
 
   // Copy a file out of the Assets Library: the absolute URL is fetched as is.
-  app.state.activePane = "left";
-  app.state.panes.left.selectedPath = fileEntry.path;
-  app.state.panes.right.source = "data";
-  app.state.panes.right.path = "imported";
+  app.session.activePane = "left";
+  app.session.panes.left.selectedPath = fileEntry.path;
+  app.session.panes.right.source = "data";
+  app.session.panes.right.path = "imported";
   harness.controls.copyButton.trigger("click");
   await flushPromises();
   assert.deepEqual(fetchCalls, [fileEntry.path]);
@@ -770,12 +773,12 @@ test("on The Forge the commander browses, copies, uploads, and creates folders i
   try {
     setBrowseResult("data", "imported/dir-a", { target: "imported/dir-a", dirs: [], files: ["imported/dir-a/child.txt"] });
     env.state.createDirectoryErrors.set("maps/dir-a", new Error("forge refused"));
-    app.state.panes.left.path = "maps";
-    app.state.panes.right.entries = [
+    app.session.panes.left.path = "maps";
+    app.session.panes.right.entries = [
       { path: "imported/dir-a", label: "[dir-a]", name: "dir-a", type: "directory", isParent: false }
     ];
-    app.state.panes.right.selectedPath = "imported/dir-a";
-    app.state.activePane = "right";
+    app.session.panes.right.selectedPath = "imported/dir-a";
+    app.session.activePane = "right";
     harness.controls.copyButton.trigger("click");
     await flushPromises();
   } finally {
@@ -789,8 +792,8 @@ test("on The Forge the commander browses, copies, uploads, and creates folders i
   assert.equal(fetchCalls.at(-1), "/route/imported/dir-a/child.txt");
 
   // Upload and new folder in the Assets Library pane.
-  app.state.activePane = "left";
-  app.state.panes.left.path = "maps";
+  app.session.activePane = "left";
+  app.session.panes.left.path = "maps";
   harness.controls.uploadButton.trigger("click");
   const uploadInput = env.state.createdInputs.at(-1);
   uploadInput.files = [new File(["a"], "upload.png")];
@@ -809,7 +812,7 @@ test("on The Forge the commander browses, copies, uploads, and creates folders i
   harness.controls.leftForm.trigger("submit");
   await flushPromises();
   assert.deepEqual(env.state.browseCalls.at(-1), { source: "forgevtt", target: "maps/tokens", options: {} });
-  assert.equal(app.state.panes.left.path, "maps/tokens");
+  assert.equal(app.session.panes.left.path, "maps/tokens");
 
   assert.deepEqual(env.state.notifications.error, []);
 });
@@ -821,13 +824,13 @@ test("a restored Assets Library pane falls back to the default source outside Th
   });
 
   const app = new __test__.SFCFileCommanderApp();
-  assert.equal(app.state.panes.left.source, "data");
-  assert.equal(app.state.panes.right.source, "public");
+  assert.equal(app.session.panes.left.source, "data");
+  assert.equal(app.session.panes.right.source, "public");
 
   simulateForge();
   const forgeApp = new __test__.SFCFileCommanderApp();
-  assert.equal(forgeApp.state.panes.left.source, "forgevtt");
-  assert.equal(forgeApp.state.panes.left.path, "maps");
+  assert.equal(forgeApp.session.panes.left.source, "forgevtt");
+  assert.equal(forgeApp.session.panes.left.path, "maps");
 });
 
 const fileEntry = (path) => {
@@ -839,15 +842,14 @@ async function createWiredApp({ left = [], right = [] } = {}) {
   setBrowseResult("data", "", { target: "", dirs: [], files: [] });
   setBrowseResult("public", "", { target: "", dirs: [], files: [] });
   const app = new __test__.SFCFileCommanderApp();
-  await app.getData();
+  await app._prepareContext();
   const harness = createHtmlHarness();
-  app.element = harness.root;
-  app.activateListeners(harness.root);
-  app.state.activePane = "left";
-  app.state.panes.left.entries = left;
-  app.state.panes.left.selectedPath = left[0]?.path ?? "";
-  app.state.panes.right.entries = right;
-  app.state.panes.right.selectedPath = right[0]?.path ?? "";
+  renderInto(app, harness);
+  app.session.activePane = "left";
+  app.session.panes.left.entries = left;
+  app.session.panes.left.selectedPath = left[0]?.path ?? "";
+  app.session.panes.right.entries = right;
+  app.session.panes.right.selectedPath = right[0]?.path ?? "";
   return { app, harness };
 }
 
@@ -866,25 +868,25 @@ test("keyboard selection updates rows in place, scrolls into view, and saves the
   const down = harness.controls.app.trigger("keydown", { key: "ArrowDown" });
   assert.equal(down.defaultPrevented, true);
   assert.equal(down.propagationStopped, true);
-  assert.equal(app.state.panes.left.selectedPath, "b.txt");
+  assert.equal(app.session.panes.left.selectedPath, "b.txt");
   assert.equal(leftEntry.hasClass("is-selected"), true);
   assert.deepEqual(leftEntry.scrollCalls, [{ block: "nearest" }]);
   assert.equal(statusLine.textContent, "Selection: b.txt");
   assert.equal(statusLine.attributes.title, "Selection: b.txt");
 
   harness.controls.app.trigger("keydown", { key: "ArrowDown" });
-  assert.equal(app.state.panes.left.selectedPath, "c.txt");
+  assert.equal(app.session.panes.left.selectedPath, "c.txt");
   assert.equal(leftEntry.hasClass("is-selected"), false);
   harness.controls.app.trigger("keydown", { key: "Home" });
-  assert.equal(app.state.panes.left.selectedPath, "a.txt");
+  assert.equal(app.session.panes.left.selectedPath, "a.txt");
   harness.controls.app.trigger("keydown", { key: "End" });
-  assert.equal(app.state.panes.left.selectedPath, "c.txt");
+  assert.equal(app.session.panes.left.selectedPath, "c.txt");
   harness.controls.app.trigger("keydown", { key: "ArrowUp" });
-  assert.equal(app.state.panes.left.selectedPath, "b.txt");
+  assert.equal(app.session.panes.left.selectedPath, "b.txt");
 
   // Tab only moves the active pane marker.
   harness.controls.app.trigger("keydown", { key: "Tab" });
-  assert.equal(app.state.activePane, "right");
+  assert.equal(app.session.activePane, "right");
   assert.equal(rightPane.hasClass("is-active"), true);
   assert.equal(leftPane.hasClass("is-active"), false);
   assert.equal(rightEntry.hasClass("is-selected"), true);
@@ -892,7 +894,7 @@ test("keyboard selection updates rows in place, scrolls into view, and saves the
 
   // Clicking a row works the same way.
   harness.controls.leftEntry.trigger("click");
-  assert.equal(app.state.activePane, "left");
+  assert.equal(app.session.activePane, "left");
   assert.equal(statusLine.textContent, "Selection: b.txt");
 
   await flushPromises();
@@ -916,15 +918,15 @@ test("keyboard selection updates rows in place, scrolls into view, and saves the
 test("a render scrolls the selected rows back into view and shows the selection in the status line", async () => {
   setBrowseResult("data", "", { target: "", dirs: ["folder-a"], files: ["file-a.txt"] });
   const app = new __test__.SFCFileCommanderApp();
-  const data = await app.getData();
+  const data = await app._prepareContext();
   assert.equal(data.status, "Selection: folder-a");
 
-  app.state.panes.left.selectedPath = "";
-  assert.equal((await app.getData()).status, "Selection: none");
+  app.session.panes.left.selectedPath = "";
+  assert.equal((await app._prepareContext()).status, "Selection: none");
 
   const harness = createHtmlHarness();
   harness.controls.leftEntry.addClass("is-selected");
-  app.activateListeners(harness.root);
+  renderInto(app, harness);
   assert.deepEqual(harness.controls.leftEntry.scrollCalls, [{ block: "nearest" }]);
   assert.deepEqual(harness.controls.rightEntry.scrollCalls, []);
 });
@@ -939,26 +941,26 @@ test("Ctrl+C copies the selected path in the form Foundry's FilePicker returns",
       ]
     });
 
-    app.state.panes.left.selectedPath = "worlds/test/map%20a.png";
+    app.session.panes.left.selectedPath = "worlds/test/map%20a.png";
     const event = harness.controls.app.trigger("keydown", { key: "c", ctrlKey: true });
     await flushPromises();
     assert.equal(event.propagationStopped, true);
     assert.deepEqual(env.state.clipboardWrites, ["worlds/test/map%20a.png"]);
     assert.equal(env.state.notifications.info.at(-1), "path copied worlds/test/map%20a.png");
 
-    app.state.panes.left.selectedPath = "worlds/test/tokens";
+    app.session.panes.left.selectedPath = "worlds/test/tokens";
     harness.controls.copyPathButton.trigger("click");
     await flushPromises();
     assert.equal(env.state.clipboardWrites.at(-1), "worlds/test/tokens");
 
     // S3 and The Forge list full URLs, which is also what their FilePicker returns.
-    app.state.panes.left.entries.push(fileEntry(`${FORGE_USER_URL}maps/castle.webp`));
-    app.state.panes.left.selectedPath = `${FORGE_USER_URL}maps/castle.webp`;
+    app.session.panes.left.entries.push(fileEntry(`${FORGE_USER_URL}maps/castle.webp`));
+    app.session.panes.left.selectedPath = `${FORGE_USER_URL}maps/castle.webp`;
     harness.controls.app.trigger("keydown", { key: "C", ctrlKey: true });
     await flushPromises();
     assert.equal(env.state.clipboardWrites.at(-1), `${FORGE_USER_URL}maps/castle.webp`);
 
-    app.state.panes.left.selectedPath = "worlds";
+    app.session.panes.left.selectedPath = "worlds";
     harness.controls.app.trigger("keydown", { key: "c", ctrlKey: true });
     await flushPromises();
     assert.equal(env.state.clipboardWrites.length, 3);
@@ -1015,7 +1017,7 @@ test("F3 and Enter show images and videos in ImagePopout, play audio in a dialog
     ]
   });
   const select = (path) => {
-    app.state.panes.left.selectedPath = path;
+    app.session.panes.left.selectedPath = path;
   };
 
   select("art/hero.png");
@@ -1093,8 +1095,8 @@ test("overwrite helpers read listings case-insensitively and remember apply-to-a
 
 test("F5 asks before overwriting a file and skips, overwrites, or cancels as answered", async () => {
   const { app, harness } = await createWiredApp({ left: [fileEntry("source.txt")] });
-  app.state.panes.right.source = "data";
-  app.state.panes.right.path = "target";
+  app.session.panes.right.source = "data";
+  app.session.panes.right.path = "target";
   setBrowseResult("data", "target", { target: "target", dirs: [], files: ["target/Source.txt"] });
 
   env.state.dialogAnswers.push("cancel");
@@ -1125,8 +1127,8 @@ test("directory copies ask once per clash and honor skip all, overwrite all, and
   const { app, harness } = await createWiredApp({
     left: [{ path: "dir-a", label: "[dir-a]", name: "dir-a", type: "directory", isParent: false }]
   });
-  app.state.panes.right.source = "data";
-  app.state.panes.right.path = "target";
+  app.session.panes.right.source = "data";
+  app.session.panes.right.path = "target";
   setBrowseResult("data", "dir-a", { target: "dir-a", dirs: [], files: children });
   setBrowseResult("data", "target/dir-a", { target: "target/dir-a", dirs: [], files: ["target/dir-a/A.TXT", "target/dir-a/b.txt"] });
 
@@ -1158,7 +1160,7 @@ test("directory copies ask once per clash and honor skip all, overwrite all, and
 
 test("uploads ask before overwriting and report only the files written", async () => {
   const { app, harness } = await createWiredApp({ left: [fileEntry("existing.txt")] });
-  app.state.panes.left.path = "uploads";
+  app.session.panes.left.path = "uploads";
   setBrowseResult("data", "uploads", { target: "uploads", dirs: [], files: ["uploads/existing.txt"] });
 
   env.state.dialogAnswers.push({ action: "skip", all: false });
@@ -1182,4 +1184,42 @@ test("uploads ask before overwriting and report only the files written", async (
   assert.deepEqual(env.state.uploadCalls, []);
   assert.equal(env.state.notifications.info.at(-1), "upload cancelled 0");
   assert.deepEqual(env.state.notifications.error, []);
+});
+test("the commander is an ApplicationV2 window with a settings gear before the close button", async () => {
+  const { ApplicationV2 } = globalThis.foundry.applications.api;
+  assert.equal(__test__.SFCFileCommanderApp.prototype instanceof ApplicationV2, true);
+  assert.equal(__test__.SFCOpenMenu.prototype instanceof ApplicationV2, true);
+  assert.equal(__test__.SFCSelfTestMenu.prototype instanceof ApplicationV2, true);
+  assert.equal(__test__.SFCFileCommanderApp.DEFAULT_OPTIONS.window.resizable, true);
+  assert.equal(typeof __test__.SFCFileCommanderApp.DEFAULT_OPTIONS.actions.openSettings, "function");
+
+  env.state.localizations.set("SFC.Toolbar.Settings", "Settings");
+  const app = new __test__.SFCFileCommanderApp();
+  assert.equal(app.title, "File Commander");
+  const frame = await app._renderFrame({});
+  assert.equal(frame.inserted.length, 1);
+  const gear = frame.inserted[0];
+  assert.equal(gear.dataset.action, "openSettings");
+  assert.match(gear.className, /fa-gear/);
+  assert.equal(gear.dataset.tooltip, "Settings");
+  assert.equal(gear.attributes["aria-label"], "Settings");
+});
+
+test("the function bar buttons run through the actions of ApplicationV2", async () => {
+  setBrowseResult("data", "", { target: "", dirs: ["folder-a"], files: [] });
+  const app = new __test__.SFCFileCommanderApp();
+  await app._prepareContext();
+  const harness = createHtmlHarness();
+  renderInto(app, harness);
+  const actions = __test__.SFCFileCommanderApp.DEFAULT_OPTIONS.actions;
+  for (const action of ["view", "copy", "upload", "mkdir", "refresh", "switch-pane", "copy-path"]) {
+    assert.equal(typeof actions[action], "function", action);
+  }
+  assert.equal(app.session.activePane, "left");
+  harness.controls.switchButton.trigger("click");
+  await flushPromises();
+  assert.equal(app.session.activePane, "right");
+  assert.equal(harness.controls.rightPane.hasClass("is-active"), true);
+  assert.equal(harness.controls.app.focusCalls > 0, true);
+  assert.equal(harness.root.tabIndex, 0);
 });
