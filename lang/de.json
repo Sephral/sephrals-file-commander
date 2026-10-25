@@ -91,7 +91,7 @@
   "SFC.Storage.s3": "S3",
   "SFC.Storage.forgevtt": "Assets Library",
   "SFC.Toolbar.Settings": "Einstellungen",
-  "SFC.SelfTest.Title": "File Commander Selbsttest",
+  "SFC.SelfTest.Title": "Selbsttest von File Commander",
   "SFC.SelfTest.Run": "Selbsttest starten",
   "SFC.SelfTest.Hint": "Prüft die Dateiauswahl, jeden Speicher, das Fenster und die Zwischenablage. Nach jedem Update von Foundry ausführen.",
   "SFC.SelfTest.Passed": "Selbsttest bestanden: {checks} Prüfungen.",
