@@ -102,5 +102,10 @@
   "SFC.SelfTest.Browse": "Diese Speicher lassen sich nicht durchsuchen: {storages}.",
   "SFC.SelfTest.Template": "Die Fenstervorlage des Moduls fehlt.",
   "SFC.SelfTest.Texts": "Die Texte des Moduls fehlen.",
-  "SFC.SelfTest.Clipboard": "Der Browser erlaubt kein Kopieren in die Zwischenablage, daher lassen sich Pfade nicht kopieren. Browser erlauben es nur über https oder localhost."
+  "SFC.SelfTest.Clipboard": "Der Browser erlaubt kein Kopieren in die Zwischenablage, daher lassen sich Pfade nicht kopieren. Browser erlauben es nur über https oder localhost.",
+  "SFC.Debug.Title": "Debug-Datei",
+  "SFC.Debug.Save": "Debug-Datei speichern",
+  "SFC.Debug.Hint": "Speichert eine Datei für Fehlerberichte über alle Module von Sephral in dieser Welt: Versionen, Einstellungen und was die Module aufgezeichnet haben, etwa die letzten Chatnachrichten, die sie gelesen haben. Sie enthält Chattext und Flüsternachrichten, prüfe sie vor dem Teilen.",
+  "SFC.Debug.Entry": "Debug-Datei speichern (Sephral’s Module)",
+  "SFC.Debug.Saved": "Debug-Datei {file} gespeichert. Sie enthält Chattext und Flüsternachrichten, prüfe sie vor dem Teilen."
 }

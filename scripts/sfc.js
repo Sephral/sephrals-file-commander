@@ -1,4 +1,5 @@
 import {countFeature, markUsed, registerUsage} from "./usage.mjs";
+import {registerDebugMenu, registerDebugProvider, saveDebugFile as saveSharedDebugFile} from "./debug-file.mjs";
 
 const MODULE_ID = "sephrals-file-commander";
 const DEFAULT_SCENE_CONTROL = "tokens";
@@ -117,6 +118,18 @@ Hooks.once("init", () => {
     restricted: true
   });
 
+  registerDebugMenu(MODULE_ID, {
+    name: localize("SFC.Debug.Title"),
+    label: localize("SFC.Debug.Save"),
+    hint: localize("SFC.Debug.Hint")
+  });
+  registerDebugProvider({
+    moduleId: MODULE_ID,
+    label: () => localize("SFC.Debug.Entry"),
+    notice: file => localize("SFC.Debug.Saved", {file}),
+    recent: describeDebugState
+  });
+
   registerUsage(MODULE_ID, {
     features: ["entryCopied", "filesUploaded", "folderCreated", "pathCopied", "fileOpened", "keyCommand", "selfTestRun"],
     settings: [SHOW_SCENE_CONTROL_SETTING, RESTORE_STATE_SETTING, DEFAULT_LEFT_SOURCE_SETTING]
@@ -142,7 +155,12 @@ Hooks.once("init", () => {
 Hooks.once("ready", () => {
   void ensureModuleTranslationsLoaded().then(() => noticeNewVersions());
   const module = game.modules?.get?.(MODULE_ID);
-  if ( module ) module.api = {open: openFileCommander, runSelfTest};
+  if ( module ) module.api = {
+    open: openFileCommander,
+    runSelfTest,
+    // One file for all of Sephral's modules, without a message id about their latest picture
+    saveDebugFile: messageId => saveSharedDebugFile(messageId ?? null, {moduleId: MODULE_ID})
+  };
 });
 
 Hooks.on("getSceneControlButtons", controls => {
@@ -1552,6 +1570,23 @@ async function checkIntegrations() {
   return {problems, checks};
 }
 
+// File Commander's part of the debug file of Sephral's modules: the storages, what this user may do with files, the
+// clipboard (writing needs a secure context) and whether the window is open.
+function describeDebugState() {
+  return {details: {
+    storages: availableStorages(),
+    forge: isUsingTheForge(),
+    user: {browse: canBrowseFiles(), upload: canUploadFiles()},
+    roles: {browse: game.permissions?.FILES_BROWSE ?? null, upload: game.permissions?.FILES_UPLOAD ?? null},
+    clipboard: {
+      foundry: typeof game.clipboard?.copyPlainText === "function",
+      browser: typeof globalThis.navigator?.clipboard?.writeText === "function",
+      secureContext: Boolean(globalThis.isSecureContext)
+    },
+    windowOpen: Boolean(fileCommanderApp?.rendered)
+  }};
+}
+
 // Runs the self-test and reports the result as a notification and a whispered chat message.
 async function runSelfTest({report = true} = {}) {
   countFeature(MODULE_ID, "selfTestRun");
@@ -1640,5 +1675,6 @@ export const __test__ = {
   openModuleSettings,
   runSelfTest,
   noticeNewVersions,
+  describeDebugState,
   TESTED_VERSIONS
 };

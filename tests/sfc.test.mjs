@@ -54,7 +54,14 @@ test("registers settings, menu, keybinding, and scene controls", async () => {
   await env.hooks.trigger("init");
   // The module's seven settings and the hidden consent and state settings of the usage statistics.
   assert.equal(env.state.registerCalls.length, 9);
-  assert.equal(env.state.registerMenuCalls.length, 2);
+  // Open, self test and the debug file of Sephral's modules
+  assert.equal(env.state.registerMenuCalls.length, 3);
+  assert.equal(env.state.registerMenuCalls.find((entry) => entry.key === "debugFile")?.data.restricted, true);
+  const provider = globalThis.sephralsDebugFiles?.providers.get(__test__.MODULE_ID);
+  assert.equal(typeof provider?.recent, "function");
+  const { details } = provider.recent();
+  assert.deepEqual(details.user, { browse: true, upload: true });
+  assert.equal(details.windowOpen, false);
   assert.equal(env.state.keybindingCalls.length, 1);
   assert.equal(env.state.keybindingCalls[0].data.onDown(), true);
 

@@ -41,8 +41,15 @@ Opening the commander needs the Foundry permission to browse files. Copy, upload
 * `Show scene control button` toggles the scene control icon on the left side
 * `Default left source` and `Default right source` define the initial storages when no earlier session is restored
 * `Run self test` checks the file picker, every storage, the window and the clipboard. Run it after every Foundry update. When a newer Foundry than the tested one is installed, the GM gets a notice once
+* `Save debug file` (GM) saves a file for bug reports, see [Debug file](#debug-file)
 
 The gear in the title bar of the commander opens these settings.
+
+## Debug file
+
+For bug reports, the GM saves one file about all of Sephral’s modules in this world: `Save debug file` in the module settings, or `Save Debug File (Sephral’s Modules)` in the context menu of a chat message. It holds the versions of Foundry, the system and the active modules, the settings of the modules and what they recorded, for File Commander the available storages, whether the GM may browse and upload files, which roles may do so, whether the clipboard works and whether the commander is open. Macros call `game.modules.get("sephrals-file-commander").api.saveDebugFile()`.
+
+The file contains chat text and whispers. Check it before you share it.
 
 ## Usage statistics
 
@@ -63,7 +70,7 @@ On [The Forge](https://forge-vtt.com/) the commander adds your Assets Library to
 
 ## Macros
 
-`game.modules.get("sephrals-file-commander").api` offers `open()`, which opens the commander, and `runSelfTest()`, which runs the self test (GM).
+`game.modules.get("sephrals-file-commander").api` offers `open()`, which opens the commander, `runSelfTest()`, which runs the self test (GM), and `saveDebugFile()`, which saves the [debug file](#debug-file) (GM).
 
 ## Intentional limits
 

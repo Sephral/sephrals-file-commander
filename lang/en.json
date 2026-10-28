@@ -102,5 +102,10 @@
   "SFC.SelfTest.Browse": "These storages cannot be browsed: {storages}.",
   "SFC.SelfTest.Template": "The window template of the module is missing.",
   "SFC.SelfTest.Texts": "The texts of the module are missing.",
-  "SFC.SelfTest.Clipboard": "The browser allows no copying to the clipboard, so paths cannot be copied. Browsers allow it only on https or localhost."
+  "SFC.SelfTest.Clipboard": "The browser allows no copying to the clipboard, so paths cannot be copied. Browsers allow it only on https or localhost.",
+  "SFC.Debug.Title": "Debug file",
+  "SFC.Debug.Save": "Save debug file",
+  "SFC.Debug.Hint": "Saves one file for bug reports about all of Sephral’s modules in this world: versions, settings and what the modules recorded, such as the latest chat messages they read. It contains chat text and whispers, check it before you share it.",
+  "SFC.Debug.Entry": "Save Debug File (Sephral’s Modules)",
+  "SFC.Debug.Saved": "Debug file {file} saved. It contains chat text and whispers, check it before you share it."
 }
