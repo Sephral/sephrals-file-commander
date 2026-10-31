@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "node --check scripts/sfc.js && node --check scripts/debug-file.mjs",
+    "check": "node build/check.mjs",
     "check:manifest": "node build/validate-manifest.mjs",
     "test": "node --test",
     "test:coverage": "node --test --experimental-test-coverage",

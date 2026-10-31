@@ -1,5 +1,6 @@
 import {countFeature, markUsed, registerUsage} from "./usage.mjs";
 import {registerDebugMenu, registerDebugProvider, saveDebugFile as saveSharedDebugFile} from "./debug-file.mjs";
+import {registerHubModule} from "./hub.mjs";
 
 const MODULE_ID = "sephrals-file-commander";
 const DEFAULT_SCENE_CONTROL = "tokens";
@@ -27,6 +28,7 @@ let MODULE_TRANSLATION_LOAD = null;
 let fileCommanderApp = null;
 
 Hooks.once("init", () => {
+  registerHubModule({moduleId: MODULE_ID, tested: TESTED_VERSIONS});
   game.settings.register(MODULE_ID, STATE_SETTING, {
     scope: "client",
     config: false,

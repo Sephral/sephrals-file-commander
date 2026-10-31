@@ -54,8 +54,11 @@ test("registers settings, menu, keybinding, and scene controls", async () => {
   await env.hooks.trigger("init");
   // The module's seven settings and the hidden consent and state settings of the usage statistics.
   assert.equal(env.state.registerCalls.length, 9);
-  // Open, self test and the debug file of Sephral's modules
-  assert.equal(env.state.registerMenuCalls.length, 3);
+  // Open, self test, the window Sephral's Modules and the debug file of Sephral's modules
+  assert.equal(env.state.registerMenuCalls.length, 4);
+  // The window Sephral's Modules is the first entry of the settings tab
+  assert.equal(env.state.registerMenuCalls[0].key, "sephralsModules");
+  assert.equal(env.state.registerMenuCalls[0].data.restricted, true);
   assert.equal(env.state.registerMenuCalls.find((entry) => entry.key === "debugFile")?.data.restricted, true);
   const provider = globalThis.sephralsDebugFiles?.providers.get(__test__.MODULE_ID);
   assert.equal(typeof provider?.recent, "function");
