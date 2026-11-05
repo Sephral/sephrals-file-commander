@@ -12,7 +12,7 @@ const DEFAULT_LEFT_SOURCE_SETTING = "defaultLeftSource";
 const DEFAULT_RIGHT_SOURCE_SETTING = "defaultRightSource";
 const ACKNOWLEDGED_VERSIONS_SETTING = "acknowledgedVersions";
 // The Foundry version the module was verified against (see the self-test).
-const TESTED_VERSIONS = Object.freeze({core: "14.369"});
+const TESTED_VERSIONS = Object.freeze({core: "14.370"});
 const SUPPORTED_UI_LANGUAGES = Object.freeze(["en", "de"]);
 const DEFAULT_UI_LANGUAGE = "en";
 // The Forge serves the user's Assets Library through this extra FilePicker source.
