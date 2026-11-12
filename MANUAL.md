@@ -64,7 +64,7 @@ With the GM’s consent only the active GM’s browser counts, and it sends at m
 * on how many of the last 30 days the module was used
 * how often files are opened, paths are copied, files or folders are copied to the other pane, folders are created, files are uploaded, the Commander key commands are used and the self test runs
 * the settings *Show scene control button*, *Restore last session* and *Default left source* (only the chosen option)
-* where errors occur in the module code: file, line and error type, never the error message
+* where errors occur in the module code: file, line, error type and whether the error arose in the module itself, in Foundry, in the game system or in another module, never the error message or the name of another module
 
 No names, chat messages, notes, dice results or other content of the world are sent.
 
