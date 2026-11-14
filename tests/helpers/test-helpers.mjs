@@ -232,6 +232,8 @@ export function createTestEnvironment() {
     controlActivations: [],
     browseCalls: [],
     uploadCalls: [],
+    // File names the fake server refuses: FilePicker.upload then resolves to false, like a refusal of the real server
+    uploadRefused: new Set(),
     createDirectoryCalls: [],
     deleteCalls: [],
     browseResults: new Map(),
@@ -394,6 +396,7 @@ export function createTestEnvironment() {
     },
     async upload(source, target, file, body, options) {
       state.uploadCalls.push({ source, target, file, body, options });
+      if (state.uploadRefused.has(file.name)) return false;
       // The Forge answers forgevtt uploads with the absolute Assets Library URL.
       const prefix = source === "forgevtt" ? (globalThis.ForgeVTT?.ASSETS_LIBRARY_URL_PREFIX ?? "") + "user123/" : "";
       return { path: `${prefix}${target}/${file.name}` };
@@ -600,6 +603,8 @@ export function createTestEnvironment() {
     ["SFC.Notification.CopyUnsupported", "copy unsupported"],
     ["SFC.Notification.DirectoryCreated", "directory created {name}"],
     ["SFC.Notification.UploadFinished", "upload finished {count}"],
+    ["SFC.Notification.UploadFailed", "upload failed {count}"],
+    ["SFC.Notification.CopyFailed", "copy failed {name} {count}"],
     ["SFC.Notification.Cancelled", "cancelled"],
     ["SFC.Notification.Error", "error {message}"],
     ["SFC.Error.NoBrowsePermission", "no browse permission"],
@@ -653,6 +658,7 @@ export function createTestEnvironment() {
       state.controlActivations = [];
       state.browseCalls = [];
       state.uploadCalls = [];
+      state.uploadRefused = new Set();
       state.createDirectoryCalls = [];
       state.deleteCalls = [];
       state.browseResults = new Map();

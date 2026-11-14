@@ -277,11 +277,36 @@ function canBrowseFiles() {
 }
 
 // Uploads, copies and new folders all write through the upload route or createDirectory.
+// The Mac has no Ctrl habit: Cmd+C, Cmd+R and Cmd+U do what Ctrl+C, Ctrl+R and Ctrl+U do there (Ctrl keeps working).
+function isMacPlatform() {
+  const nav = globalThis.navigator;
+  return /mac/i.test(String(nav?.userAgentData?.platform ?? nav?.platform ?? ""));
+}
+
+function isCommandKey(event, mac = isMacPlatform()) {
+  return event.ctrlKey === true || (mac && event.metaKey === true);
+}
+
+// The function bar names the key the user presses: Cmd on a Mac.
+function commandKeyLabel(key, mac = isMacPlatform()) {
+  return mac ? String(key).replace(/^Ctrl\+/, "Cmd+") : key;
+}
+
+// FilePicker.upload resolves to the server's answer, which always names the stored path. false (the server refused,
+// Foundry already showed its message), undefined (too large, no usable answer) and {} (the request failed) are all
+// failures, however the upload looked from the outside.
+function uploadSucceeded(result) {
+  return typeof result?.path === "string" && result.path.length > 0;
+}
+
 function canUploadFiles() {
   return game.user?.can("FILES_UPLOAD") === true;
 }
 
 const {ApplicationV2, HandlebarsApplicationMixin} = foundry.applications.api;
+
+// One pane's markup, used for the left and the right pane through a partial of file-commander.html.
+const PANE_TEMPLATE = `modules/${MODULE_ID}/templates/pane.html`;
 
 // The commander's buttons in the function bar, by their data-action. ApplicationV2 calls them with the window as this.
 const TOOLBAR_ACTIONS = ["view", "copy", "upload", "mkdir", "refresh", "switch-pane", "copy-path"];
@@ -329,7 +354,7 @@ class SFCFileCommanderApp extends HandlebarsApplicationMixin(ApplicationV2) {
   };
 
   static PARTS = {
-    main: {template: `modules/${MODULE_ID}/templates/file-commander.html`}
+    main: {template: `modules/${MODULE_ID}/templates/file-commander.html`, templates: [PANE_TEMPLATE]}
   };
 
   // The module language may differ from Foundry's, so the title is localized here instead of by the frame.
@@ -440,8 +465,8 @@ class SFCFileCommanderApp extends HandlebarsApplicationMixin(ApplicationV2) {
       // Foundry has no client API to delete files, so F8 stays a placeholder like F4 and F6.
       { key: "F8", label: localize("SFC.Command.Delete"), disabled: true },
       { key: "Tab", label: localize("SFC.Command.Switch"), action: "switch-pane" },
-      writeCommand("Ctrl+U", localize("SFC.Command.Upload"), "upload"),
-      { key: "Ctrl+C", label: localize("SFC.Command.CopyPath"), action: "copy-path" }
+      writeCommand(commandKeyLabel("Ctrl+U"), localize("SFC.Command.Upload"), "upload"),
+      { key: commandKeyLabel("Ctrl+C"), label: localize("SFC.Command.CopyPath"), action: "copy-path" }
     ];
   }
 
@@ -770,7 +795,7 @@ class SFCFileCommanderApp extends HandlebarsApplicationMixin(ApplicationV2) {
     const activePane = this.#getActivePaneKey();
 
     // Commands by key, not the navigation keys: shows whether the Commander keys are used.
-    if ( ["F3", "F5", "F7"].includes(event.key) || (event.ctrlKey && ["c", "r", "u"].includes(event.key?.toLowerCase())) ) {
+    if ( ["F3", "F5", "F7"].includes(event.key) || (isCommandKey(event) && ["c", "r", "u"].includes(event.key?.toLowerCase())) ) {
       countFeature(MODULE_ID, "keyCommand");
     }
 
@@ -873,7 +898,7 @@ class SFCFileCommanderApp extends HandlebarsApplicationMixin(ApplicationV2) {
       return;
     }
 
-    if ( event.key.toLowerCase() === "c" && event.ctrlKey ) {
+    if ( event.key.toLowerCase() === "c" && isCommandKey(event) ) {
       consumeKeyEvent(event);
       try {
         await this.#copySelectedPath();
@@ -883,7 +908,7 @@ class SFCFileCommanderApp extends HandlebarsApplicationMixin(ApplicationV2) {
       return;
     }
 
-    if ( event.key.toLowerCase() === "r" && event.ctrlKey ) {
+    if ( event.key.toLowerCase() === "r" && isCommandKey(event) ) {
       consumeKeyEvent(event);
       try {
         await this.#refreshPanes();
@@ -893,7 +918,7 @@ class SFCFileCommanderApp extends HandlebarsApplicationMixin(ApplicationV2) {
       return;
     }
 
-    if ( event.key.toLowerCase() === "u" && event.ctrlKey ) {
+    if ( event.key.toLowerCase() === "u" && isCommandKey(event) ) {
       consumeKeyEvent(event);
       try {
         await this.#uploadIntoActivePane();
@@ -1067,10 +1092,14 @@ class SFCFileCommanderApp extends HandlebarsApplicationMixin(ApplicationV2) {
     ui.notifications?.info(localize("SFC.Notification.CopyStarted", {name: selection.label}));
     const run = createTransferRun(selection.type === "directory");
     await this.#copyEntry(selection, sourcePane, targetPane, targetPane.path, run);
-    countFeature(MODULE_ID, "entryCopied");
+    if ( run.copied || !run.failed ) countFeature(MODULE_ID, "entryCopied");
     await this.#browsePane(targetSide, targetPane.path, {keepSelection: true});
-    const finishedKey = run.cancelled ? "SFC.Notification.CopyCancelled" : "SFC.Notification.CopyFinished";
-    ui.notifications?.info(localize(finishedKey, {name: selection.label}));
+    if ( run.failed ) {
+      ui.notifications?.warn(localize("SFC.Notification.CopyFailed", {name: selection.label, count: run.failed}));
+    } else {
+      const finishedKey = run.cancelled ? "SFC.Notification.CopyCancelled" : "SFC.Notification.CopyFinished";
+      ui.notifications?.info(localize(finishedKey, {name: selection.label}));
+    }
     this.#notifySkipped(run);
     this.render();
   }
@@ -1093,7 +1122,8 @@ class SFCFileCommanderApp extends HandlebarsApplicationMixin(ApplicationV2) {
     }
 
     if ( !(await this.#confirmWrite(run, targetPane, targetDirectory, entry.name)) ) return;
-    await this.#copyFile(entry, targetPane, targetDirectory);
+    if ( await this.#copyFile(entry, targetPane, targetDirectory) ) run.copied += 1;
+    else run.failed += 1;
   }
 
   // Resolves to true when the file may be written: no file of that name exists yet, or the user chose to overwrite it.
@@ -1127,6 +1157,7 @@ class SFCFileCommanderApp extends HandlebarsApplicationMixin(ApplicationV2) {
     if ( run.skipped ) ui.notifications?.info(localize("SFC.Notification.SkippedExisting", {count: run.skipped}));
   }
 
+  // Resolves to false when the server did not store the file.
   async #copyFile(entry, targetPane, targetDirectory) {
     const response = await fetch(toFetchUrl(entry.path));
     if ( !response.ok ) throw new Error(localize("SFC.Error.FetchFailed"));
@@ -1139,7 +1170,7 @@ class SFCFileCommanderApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
     const body = {};
     if ( targetPane.source === "s3" && targetPane.bucket ) body.bucket = targetPane.bucket;
-    await getFilePickerClass().upload(targetPane.source, targetDirectory, file, body, {notify: false});
+    return uploadSucceeded(await getFilePickerClass().upload(targetPane.source, targetDirectory, file, body, {notify: false}));
   }
 
   async #ensureDirectory(pane, path, {ignoreErrors = false} = {}) {
@@ -1211,14 +1242,17 @@ class SFCFileCommanderApp extends HandlebarsApplicationMixin(ApplicationV2) {
     for ( const file of files ) {
       if ( run.cancelled ) break;
       if ( !(await this.#confirmWrite(run, pane, pane.path, file.name)) ) continue;
-      await getFilePickerClass().upload(pane.source, pane.path, file, body, {notify: false});
-      uploaded += 1;
+      if ( uploadSucceeded(await getFilePickerClass().upload(pane.source, pane.path, file, body, {notify: false})) ) uploaded += 1;
+      else run.failed += 1;
     }
     if ( uploaded ) countFeature(MODULE_ID, "filesUploaded");
 
     await this.#browsePane(side, pane.path, {keepSelection: true});
-    const finishedKey = run.cancelled ? "SFC.Notification.UploadCancelled" : "SFC.Notification.UploadFinished";
-    ui.notifications?.info(localize(finishedKey, {count: uploaded}));
+    if ( uploaded || !run.failed ) {
+      const finishedKey = run.cancelled ? "SFC.Notification.UploadCancelled" : "SFC.Notification.UploadFinished";
+      ui.notifications?.info(localize(finishedKey, {count: uploaded}));
+    }
+    if ( run.failed ) ui.notifications?.warn(localize("SFC.Notification.UploadFailed", {count: run.failed}));
     this.#notifySkipped(run);
     this.render();
   }
@@ -1443,6 +1477,8 @@ function createTransferRun(multiple) {
     mode: "ask",
     cancelled: false,
     skipped: 0,
+    copied: 0,
+    failed: 0,
     existing: new Map()
   };
 }
@@ -1645,6 +1681,9 @@ export const __test__ = {
   SFCSelfTestMenu,
   SFCFileCommanderApp,
   localize,
+  isCommandKey,
+  commandKeyLabel,
+  uploadSucceeded,
   normalizeUiLanguage,
   getPreferredLanguage,
   getModuleLanguage,

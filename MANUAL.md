@@ -8,6 +8,7 @@ This manual covers the details. For a quick overview see the [README](README.md)
 * Keyboard navigation in the style of the classic commanders with arrow keys, `Enter`, `Tab`, `Backspace` and `F3`
 * Copy files and whole folders from one panel to the other
 * Asks before a copy or upload overwrites an existing file. With several files you can apply the answer to all remaining files
+* Reports files the server did not store (for example a file type Foundry does not accept) with a warning at the end of the copy or upload, instead of claiming success
 * Folder creation in writable storages
 * Local upload into the active panel
 * Images and videos open in Foundry's image viewer, audio files play in a small player
@@ -28,6 +29,7 @@ This manual covers the details. For a quick overview see the [README](README.md)
 * `F5` copies the selected entry to the opposite panel
 * `F7` creates a directory in the active panel
 * `Ctrl+U` uploads files into the active panel
+* On a Mac `Cmd+C`, `Cmd+R` and `Cmd+U` work like the Ctrl keys (the function bar then shows Cmd, Ctrl keeps working)
 
 ## Permissions
 

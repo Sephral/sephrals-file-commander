@@ -1,0 +1,68 @@
+{{!-- One pane of the commander. Called twice by file-commander.html with pane (the prepared pane) and side ("left" or "right"). --}}
+<section class="sfc-pane {{pane.activeClass}}" data-pane="{{side}}">
+  <header class="sfc-pane-header">
+    <div class="sfc-pane-caption">
+      <span class="sfc-pane-title">{{pane.title}}</span>
+      <span class="sfc-pane-summary">{{pane.summary}}</span>
+    </div>
+
+    <div class="sfc-pane-meta">
+      <label class="sfc-select">
+        <span>{{labels.source}}</span>
+        <select name="source" data-pane="{{side}}">
+          {{#each pane.sourceOptions}}
+          <option value="{{value}}" {{#if selected}}selected{{/if}}>{{label}}</option>
+          {{/each}}
+        </select>
+      </label>
+
+      {{#if pane.showBucket}}
+      <label class="sfc-select">
+        <span>{{labels.bucket}}</span>
+        <select name="bucket" data-pane="{{side}}">
+          {{#each pane.bucketOptions}}
+          <option value="{{value}}" {{#if selected}}selected{{/if}}>{{label}}</option>
+          {{/each}}
+        </select>
+      </label>
+      {{/if}}
+    </div>
+
+    <form class="sfc-path-row" data-pane="{{side}}">
+      <label class="sfc-path-label" for="sfc-{{side}}-path">{{labels.path}}</label>
+      <input id="sfc-{{side}}-path" type="text" name="path" value="{{pane.path}}" autocomplete="off">
+    </form>
+  </header>
+
+  <div class="sfc-list-frame">
+    {{#if pane.error}}
+    <div class="sfc-pane-error">{{pane.error}}</div>
+    {{else}}
+    <div class="sfc-columns">
+      <span>{{labels.name}}</span>
+      <span>{{labels.ext}}</span>
+      <span>{{labels.type}}</span>
+    </div>
+
+    <div class="sfc-entry-list">
+      {{#if pane.entries.length}}
+        {{#each pane.entries}}
+        <button
+          type="button"
+          class="sfc-entry {{cssClass}}"
+          data-pane="{{../side}}"
+          data-path="{{path}}"
+          data-entry-type="{{type}}"
+        >
+          <span class="sfc-entry-name">{{label}}</span>
+          <span class="sfc-entry-ext">{{extension}}</span>
+          <span class="sfc-entry-kind">{{typeLabel}}</span>
+        </button>
+        {{/each}}
+      {{else}}
+      <div class="sfc-empty">{{labels.empty}}</div>
+      {{/if}}
+    </div>
+    {{/if}}
+  </div>
+</section>

@@ -74,6 +74,8 @@
   "SFC.Notification.CopyUnsupported": "The target storage does not allow uploads or directory creation.",
   "SFC.Notification.DirectoryCreated": "Directory '{name}' created.",
   "SFC.Notification.UploadFinished": "Uploaded {count} file(s).",
+  "SFC.Notification.UploadFailed": "{count} file(s) could not be written. The server refused them, check the rights of the target folder.",
+  "SFC.Notification.CopyFailed": "Copy of '{name}' is incomplete: {count} file(s) could not be written. The server refused them, check the rights of the target folder.",
   "SFC.Notification.UploadCancelled": "Upload cancelled after {count} file(s).",
   "SFC.Notification.SkippedExisting": "Skipped {count} existing file(s).",
   "SFC.Notification.PathCopied": "Copied path: {path}",

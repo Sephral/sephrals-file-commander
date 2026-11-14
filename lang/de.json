@@ -74,6 +74,8 @@
   "SFC.Notification.CopyUnsupported": "Der Zielspeicher erlaubt keine Uploads oder keine Ordnererstellung.",
   "SFC.Notification.DirectoryCreated": "Ordner '{name}' erstellt.",
   "SFC.Notification.UploadFinished": "{count} Datei(en) hochgeladen.",
+  "SFC.Notification.UploadFailed": "{count} Datei(en) konnten nicht geschrieben werden. Der Server hat sie abgelehnt, prüfe die Rechte des Zielordners.",
+  "SFC.Notification.CopyFailed": "Das Kopieren von '{name}' ist unvollständig: {count} Datei(en) konnten nicht geschrieben werden. Der Server hat sie abgelehnt, prüfe die Rechte des Zielordners.",
   "SFC.Notification.UploadCancelled": "Upload nach {count} Datei(en) abgebrochen.",
   "SFC.Notification.SkippedExisting": "{count} vorhandene Datei(en) übersprungen.",
   "SFC.Notification.PathCopied": "Pfad kopiert: {path}",

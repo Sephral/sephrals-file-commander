@@ -1233,3 +1233,65 @@ test("the function bar buttons run through the actions of ApplicationV2", async 
   assert.equal(harness.controls.app.focusCalls > 0, true);
   assert.equal(harness.root.tabIndex, 0);
 });
+
+test("an upload the server refuses is reported, not counted as written", async () => {
+  const { harness } = await createWiredApp({ left: [fileEntry("a.txt")] });
+  env.state.uploadRefused.add("bad.txt");
+  harness.controls.uploadButton.trigger("click");
+  const input = env.state.createdInputs.at(-1);
+  input.files = [new File(["a"], "good.txt"), new File(["b"], "bad.txt")];
+  input.trigger("change");
+  await flushPromises();
+  assert.equal(env.state.notifications.info.includes("upload finished 1"), true);
+  assert.equal(env.state.notifications.warn.at(-1), "upload failed 1");
+
+  // Nothing written at all: no claim of success, only the failure
+  env.state.notifications = { info: [], warn: [], error: [] };
+  harness.controls.uploadButton.trigger("click");
+  const second = env.state.createdInputs.at(-1);
+  second.files = [new File(["b"], "bad.txt")];
+  second.trigger("change");
+  await flushPromises();
+  assert.equal(env.state.notifications.info.some((text) => text.startsWith("upload finished")), false);
+  assert.equal(env.state.notifications.warn.at(-1), "upload failed 1");
+});
+
+test("a copy the server refuses ends with a warning instead of 'copied'", async () => {
+  const { app, harness } = await createWiredApp({ left: [fileEntry("source.txt")] });
+  app.session.panes.right.source = "data";
+  app.session.panes.right.path = "target";
+  env.state.uploadRefused.add("source.txt");
+  harness.controls.copyButton.trigger("click");
+  await flushPromises();
+  assert.equal(env.state.uploadCalls.length, 1);
+  assert.equal(env.state.notifications.warn.at(-1), "copy failed source.txt 1");
+  assert.equal(env.state.notifications.info.some((text) => text.startsWith("copy finished")), false);
+  assert.deepEqual(env.state.notifications.error, []);
+});
+
+test("uploadSucceeded accepts only an answer that names the stored path", () => {
+  assert.equal(__test__.uploadSucceeded({ path: "worlds/x/a.png" }), true);
+  for ( const bad of [false, undefined, null, {}, { path: "" }, { error: "no" }, "ok", true] ) {
+    assert.equal(__test__.uploadSucceeded(bad), false, String(bad));
+  }
+});
+
+test("Cmd works like Ctrl on a Mac and only there", () => {
+  assert.equal(__test__.isCommandKey({ ctrlKey: true }, false), true);
+  assert.equal(__test__.isCommandKey({ ctrlKey: true }, true), true);
+  assert.equal(__test__.isCommandKey({ metaKey: true }, true), true);
+  assert.equal(__test__.isCommandKey({ metaKey: true }, false), false);
+  assert.equal(__test__.isCommandKey({}, true), false);
+  assert.equal(__test__.commandKeyLabel("Ctrl+U", true), "Cmd+U");
+  assert.equal(__test__.commandKeyLabel("Ctrl+U", false), "Ctrl+U");
+  assert.equal(__test__.commandKeyLabel("F5", true), "F5");
+});
+
+test("both panes use one partial", async () => {
+  const template = await readFile(new URL(modulePath("templates/file-commander.html")), "utf8");
+  const pane = await readFile(new URL(modulePath("templates/pane.html")), "utf8");
+  assert.equal((template.match(/\{\{> "modules\/sephrals-file-commander\/templates\/pane\.html"/g) ?? []).length, 2);
+  assert.equal(template.includes("sfc-entry-list"), false);
+  assert.equal(pane.includes("sfc-entry-list"), true);
+  assert.equal(__test__.SFCFileCommanderApp.PARTS.main.templates.some((path) => path.endsWith("templates/pane.html")), true);
+});
