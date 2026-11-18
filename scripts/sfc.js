@@ -72,7 +72,7 @@ Hooks.once("init", () => {
     config: true,
     type: Boolean,
     default: true,
-    onChange: () => ui.controls?.render({reset: true})
+    onChange: () => ui.controls?.render({reset: true})?.catch?.(() => {})
   });
 
   game.settings.register(MODULE_ID, DEFAULT_LEFT_SOURCE_SETTING, {
@@ -1336,7 +1336,7 @@ function refreshLocalizedUi() {
   // The frame keeps its title through a normal render, so it gets the new one explicitly.
   if ( fileCommanderApp?.rendered ) void fileCommanderApp.render({window: {title: localize("SFC.Title")}});
 
-  ui.controls?.render?.({ reset: true });
+  ui.controls?.render?.({ reset: true })?.catch?.(() => {});
 }
 
 function storageLabel(source) {
