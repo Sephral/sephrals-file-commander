@@ -52,8 +52,8 @@ test.after(() => {
 
 test("registers settings, menu, keybinding, and scene controls", async () => {
   await env.hooks.trigger("init");
-  // The module's seven settings and the hidden consent and state settings of the usage statistics.
-  assert.equal(env.state.registerCalls.length, 9);
+  // Nine settings of the module (with the WebP switch and quality) and the hidden usage consent and state.
+  assert.equal(env.state.registerCalls.length, 11);
   // Open, self test, the window Sephral's Modules and the debug file of Sephral's modules
   assert.equal(env.state.registerMenuCalls.length, 4);
   // The window Sephral's Modules is the first entry of the settings tab
@@ -312,7 +312,7 @@ test("opening needs the browse permission and write commands need the upload per
   assert.notEqual(app, null);
   const data = await app._prepareContext();
   const command = (key) => data.commandBar.find((entry) => entry.key === key);
-  for ( const key of ["F5", "F7", "Ctrl+U"] ) {
+  for ( const key of ["F5", "F7", "Ctrl+U", "Ctrl+Shift+U"] ) {
     assert.equal(command(key).disabled, true, key);
     assert.equal(command(key).action, undefined, key);
   }
@@ -343,7 +343,7 @@ test("opening needs the browse permission and write commands need the upload per
   env.state.permissions.FILES_UPLOAD = true;
   const allowed = await app._prepareContext();
   assert.equal(allowed.commandBar.find((entry) => entry.key === "F5").action, "copy");
-  assert.equal(allowed.commandBar.length, 9);
+  assert.equal(allowed.commandBar.length, 10);
   await app.close({ force: true });
 });
 
@@ -1294,4 +1294,147 @@ test("both panes use one partial", async () => {
   assert.equal(template.includes("sfc-entry-list"), false);
   assert.equal(pane.includes("sfc-entry-list"), true);
   assert.equal(__test__.SFCFileCommanderApp.PARTS.main.templates.some((path) => path.endsWith("templates/pane.html")), true);
+});
+
+function fileWithPath(name, relative, content = "x") {
+  const file = new File([content], name);
+  Object.defineProperty(file, "webkitRelativePath", { value: relative });
+  return file;
+}
+
+function pngBytes(chunks) {
+  const out = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+  for ( const type of chunks ) out.push(0, 0, 0, 0, ...Array.from(type).map((c) => c.charCodeAt(0)), 0, 0, 0, 0);
+  return new Uint8Array(out);
+}
+
+test("a folder choice becomes a plan with its folders, parents first, without junk files", () => {
+  const plan = __test__.planFromFiles([
+    fileWithPath("a.png", "maps/a.png"),
+    fileWithPath("b.png", "maps/dungeon/deep/b.png"),
+    fileWithPath("Thumbs.db", "maps/Thumbs.db"),
+    fileWithPath(".DS_Store", "maps/.DS_Store")
+  ]);
+  assert.deepEqual(plan.files.map((item) => [item.file.name, item.dir]), [["a.png", "maps"], ["b.png", "maps/dungeon/deep"]]);
+  assert.deepEqual(plan.dirs, ["maps", "maps/dungeon", "maps/dungeon/deep"]);
+  const flat = __test__.planFromFiles([new File(["a"], "single.png")]);
+  assert.deepEqual(flat.dirs, []);
+  assert.equal(flat.files[0].dir, "");
+});
+
+test("a dropped folder keeps its structure, empty folders included", async () => {
+  const fileEntry = (name) => ({ isFile: true, isDirectory: false, name, file: (ok) => ok(new File(["x"], name)) });
+  const dirEntry = (name, children) => {
+    let served = false;
+    return { isFile: false, isDirectory: true, name, createReader: () => ({ readEntries: (ok) => {
+      if ( served ) return ok([]);
+      served = true;
+      return ok(children);
+    } }) };
+  };
+  const tree = dirEntry("pack", [fileEntry("top.png"), dirEntry("sub", [fileEntry("inner.png")]), dirEntry("empty", [])]);
+  const dataTransfer = { types: ["Files"], items: [{ kind: "file", webkitGetAsEntry: () => tree }, { kind: "file", webkitGetAsEntry: () => fileEntry("loose.png") }] };
+  const plan = await __test__.planFromDrop(dataTransfer);
+  assert.deepEqual(plan.files.map((item) => `${item.dir}|${item.file.name}`).sort(), ["pack/sub|inner.png", "pack|top.png", "|loose.png"].sort());
+  assert.deepEqual(plan.dirs, ["pack", "pack/empty", "pack/sub"]);
+});
+
+test("WebP helpers pick raster images only and rename them", () => {
+  for ( const name of ["a.png", "b.JPG", "c.jpeg", "d.bmp"] ) assert.equal(__test__.webpCandidate(name), true, name);
+  for ( const name of ["a.gif", "b.svg", "c.webp", "d.mp4", "e.webm", "f.txt", "noext"] ) assert.equal(__test__.webpCandidate(name), false, name);
+  assert.equal(__test__.webpFileName("map.v2.PNG"), "map.v2.webp");
+  assert.equal(__test__.isAnimatedPng(pngBytes(["IHDR", "acTL", "IDAT", "IEND"])), true);
+  assert.equal(__test__.isAnimatedPng(pngBytes(["IHDR", "IDAT", "acTL", "IEND"])), false);
+  assert.equal(__test__.isAnimatedPng(new Uint8Array([1, 2, 3])), false);
+  assert.equal(__test__.webpQuality(), 0.85);
+  env.state.settingsValues.set("sephrals-file-commander.webpQuality", 0.2);
+  assert.equal(__test__.webpQuality(), 0.5);
+  env.state.settingsValues.set("sephrals-file-commander.webpQuality", 0.9);
+  assert.equal(__test__.webpQuality(), 0.9);
+});
+
+test("convertToWebp leaves other types, animated PNG and failures alone", async () => {
+  const gif = new File(["g"], "a.gif");
+  assert.equal(await __test__.convertToWebp(gif, 0.8), gif);
+  const animated = new File([pngBytes(["IHDR", "acTL", "IDAT", "IEND"])], "anim.png");
+  assert.equal(await __test__.convertToWebp(animated, 0.8), animated);
+  // No createImageBitmap in this environment: the original stays
+  const png = new File([pngBytes(["IHDR", "IDAT", "IEND"])], "plain.png");
+  const warn = console.warn;
+  console.warn = () => {};
+  try { assert.equal(await __test__.convertToWebp(png, 0.8), png); } finally { console.warn = warn; }
+});
+
+test("thumbnail info names the picture, the video or an icon", () => {
+  assert.equal(__test__.thumbnailInfo({ type: "file", name: "a.png", path: "x/a.png" }).isImage, true);
+  const video = __test__.thumbnailInfo({ type: "file", name: "a.mp4", path: "x/a.mp4" });
+  assert.equal(video.isVideo, true);
+  assert.match(video.thumbUrl, /a\.mp4#t=0\.1$/);
+  assert.equal(__test__.thumbnailInfo({ type: "file", name: "a.mp3", path: "x/a.mp3" }).icon, "fa-file-audio");
+  assert.equal(__test__.thumbnailInfo({ type: "directory", name: "d", path: "d" }).icon, "fa-folder");
+});
+
+test("a folder upload creates the folders, uploads into them and skips junk files", async () => {
+  const app = new __test__.SFCFileCommanderApp();
+  await app._prepareContext();
+  app.session.panes.right.source = "data";
+  app.session.panes.right.path = "target";
+  app.session.activePane = "right";
+  const harness = createHtmlHarness();
+  renderInto(app, harness);
+  harness.controls.app.trigger("keydown", { key: "u", ctrlKey: true, shiftKey: true });
+  const input = env.state.createdInputs.at(-1);
+  assert.equal(input.webkitdirectory, true);
+  input.files = [fileWithPath("a.txt", "pack/a.txt"), fileWithPath("b.txt", "pack/sub/b.txt"), fileWithPath("Thumbs.db", "pack/Thumbs.db")];
+  input.trigger("change");
+  await flushPromises();
+  assert.deepEqual(env.state.createDirectoryCalls.map((call) => call.path), ["target/pack", "target/pack/sub"]);
+  assert.deepEqual(env.state.uploadCalls.map((call) => `${call.target}|${call.file.name}`), ["target/pack|a.txt", "target/pack/sub|b.txt"]);
+  assert.equal(env.state.notifications.info.includes("upload finished 2"), true);
+  assert.deepEqual(env.state.notifications.error, []);
+  await app.close({ force: true });
+});
+
+test("the view toggle switches a pane to the thumbnail grid and the arrows walk the grid", async () => {
+  setBrowseResult("data", "", { target: "", dirs: [], files: ["a.png", "b.png", "c.png", "d.png"] });
+  const app = new __test__.SFCFileCommanderApp();
+  await app._prepareContext();
+  app.session.activePane = "left";
+  app.session.panes.left.source = "data";
+  const harness = createHtmlHarness();
+  const toggle = new TestElement({ dataset: { pane: "left" } });
+  toggle.parent = harness.controls.leftPane;
+  const baseHandler = harness.root.querySelectorAllHandler;
+  harness.root.querySelectorAllHandler = (selector) => selector === ".sfc-view-toggle" ? [toggle] : baseHandler(selector);
+  renderInto(app, harness);
+
+  assert.equal(app.session.panes.left.view, "list");
+  assert.equal((await app._prepareContext()).panes.left.grid, false);
+  toggle.trigger("click");
+  await flushPromises();
+  assert.equal(app.session.panes.left.view, "grid");
+  const context = await app._prepareContext();
+  assert.equal(context.panes.left.grid, true);
+  assert.equal(context.panes.left.viewIcon, "fa-list");
+  assert.equal(context.panes.left.entries.some((entry) => entry.isImage), true);
+  assert.equal(env.state.settingWrites.at(-1).value.panes.left.view, "grid");
+
+  app.session.panes.left.entries = ["a.png", "b.png", "c.png", "d.png"].map((name) => ({ path: name, label: name, name, type: "file", isParent: false }));
+  app.session.panes.left.selectedPath = "a.png";
+  harness.controls.app.trigger("keydown", { key: "ArrowRight" });
+  assert.equal(app.session.panes.left.selectedPath, "b.png");
+  harness.controls.app.trigger("keydown", { key: "ArrowLeft" });
+  assert.equal(app.session.panes.left.selectedPath, "a.png");
+  toggle.trigger("click");
+  await flushPromises();
+  assert.equal(app.session.panes.left.view, "list");
+  await app.close({ force: true });
+});
+
+test("the grid and the WebP switch are part of the templates", async () => {
+  const pane = await readFile(new URL(modulePath("templates/pane.html")), "utf8");
+  const template = await readFile(new URL(modulePath("templates/file-commander.html")), "utf8");
+  assert.equal(pane.includes("sfc-view-toggle"), true);
+  assert.equal(pane.includes("sfc-thumb"), true);
+  assert.equal(template.includes("sfc-webp-option"), true);
 });

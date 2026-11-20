@@ -109,5 +109,16 @@
   "SFC.Debug.Save": "Save debug file",
   "SFC.Debug.Hint": "Saves one file for bug reports about all of Sephral’s modules in this world: versions, settings and what the modules recorded, such as the latest chat messages they read. It contains chat text and whispers, check it before you share it.",
   "SFC.Debug.Entry": "Save Debug File (Sephral’s Modules)",
-  "SFC.Debug.Saved": "Debug file {file} saved. It contains chat text and whispers, check it before you share it."
+  "SFC.Debug.Saved": "Debug file {file} saved. It contains chat text and whispers, check it before you share it.",
+  "SFC.Settings.WebpOnUpload.Name": "Convert images to WebP on upload",
+  "SFC.Settings.WebpOnUpload.Hint": "PNG, JPG and BMP images become smaller WebP files when you upload them. GIF, animated PNG, SVG and videos stay as they are. The same switch sits below the two panes.",
+  "SFC.Settings.WebpQuality.Name": "WebP quality",
+  "SFC.Settings.WebpQuality.Hint": "How much detail the WebP conversion keeps, from 0.5 (small files) to 1 (best quality). 0.85 suits most maps and tokens.",
+  "SFC.Command.UploadFolder": "Folder Upload",
+  "SFC.Pane.ViewGrid": "Show thumbnails",
+  "SFC.Pane.ViewList": "Show list",
+  "SFC.Upload.Webp": "Convert images to WebP on upload (quality {quality} %)",
+  "SFC.Upload.Progress": "{done} of {total} files done, now: {name}",
+  "SFC.Upload.Cancelling": "Cancelling after the current file ...",
+  "SFC.Upload.Busy": "An upload is already running."
 }

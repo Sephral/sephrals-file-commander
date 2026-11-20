@@ -11,6 +11,13 @@ const UI_LANGUAGE_SETTING = "uiLanguage";
 const DEFAULT_LEFT_SOURCE_SETTING = "defaultLeftSource";
 const DEFAULT_RIGHT_SOURCE_SETTING = "defaultRightSource";
 const ACKNOWLEDGED_VERSIONS_SETTING = "acknowledgedVersions";
+const WEBP_ON_UPLOAD_SETTING = "webpOnUpload";
+const WEBP_QUALITY_SETTING = "webpQuality";
+const DEFAULT_WEBP_QUALITY = 0.85;
+// Raster images that convert to WebP on upload. GIF and animated PNG stay as they are, SVG and videos too.
+const WEBP_SOURCE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "bmp"]);
+// Files the operating systems leave in folders, never worth uploading.
+const JUNK_FILE_NAMES = new Set([".ds_store", "thumbs.db", "desktop.ini"]);
 // The Foundry version the module was verified against (see the self-test).
 const TESTED_VERSIONS = Object.freeze({core: "14.370"});
 const SUPPORTED_UI_LANGUAGES = Object.freeze(["en", "de"]);
@@ -95,6 +102,27 @@ Hooks.once("init", () => {
     default: "public"
   });
 
+  game.settings.register(MODULE_ID, WEBP_ON_UPLOAD_SETTING, {
+    name: localize("SFC.Settings.WebpOnUpload.Name"),
+    hint: localize("SFC.Settings.WebpOnUpload.Hint"),
+    scope: "client",
+    config: true,
+    type: Boolean,
+    default: false,
+    onChange: () => refreshWebpOption()
+  });
+
+  game.settings.register(MODULE_ID, WEBP_QUALITY_SETTING, {
+    name: localize("SFC.Settings.WebpQuality.Name"),
+    hint: localize("SFC.Settings.WebpQuality.Hint"),
+    scope: "client",
+    config: true,
+    type: Number,
+    range: {min: 0.5, max: 1, step: 0.05},
+    default: DEFAULT_WEBP_QUALITY,
+    onChange: () => refreshWebpOption()
+  });
+
   game.settings.register(MODULE_ID, ACKNOWLEDGED_VERSIONS_SETTING, {
     scope: "client",
     config: false,
@@ -133,8 +161,8 @@ Hooks.once("init", () => {
   });
 
   registerUsage(MODULE_ID, {
-    features: ["entryCopied", "filesUploaded", "folderCreated", "pathCopied", "fileOpened", "keyCommand", "selfTestRun"],
-    settings: [SHOW_SCENE_CONTROL_SETTING, RESTORE_STATE_SETTING, DEFAULT_LEFT_SOURCE_SETTING]
+    features: ["entryCopied", "filesUploaded", "folderCreated", "pathCopied", "fileOpened", "keyCommand", "selfTestRun", "folderUploaded", "webpOnUpload", "gridView"],
+    settings: [SHOW_SCENE_CONTROL_SETTING, RESTORE_STATE_SETTING, DEFAULT_LEFT_SOURCE_SETTING, WEBP_ON_UPLOAD_SETTING]
   });
 
   game.keybindings.register(MODULE_ID, "openFileCommander", {
@@ -309,7 +337,7 @@ const {ApplicationV2, HandlebarsApplicationMixin} = foundry.applications.api;
 const PANE_TEMPLATE = `modules/${MODULE_ID}/templates/pane.html`;
 
 // The commander's buttons in the function bar, by their data-action. ApplicationV2 calls them with the window as this.
-const TOOLBAR_ACTIONS = ["view", "copy", "upload", "mkdir", "refresh", "switch-pane", "copy-path"];
+const TOOLBAR_ACTIONS = ["view", "copy", "upload", "upload-folder", "mkdir", "refresh", "switch-pane", "copy-path"];
 
 // Settings menu buttons that open no window of their own.
 class SFCOpenMenu extends ApplicationV2 {
@@ -332,6 +360,11 @@ class SFCFileCommanderApp extends HandlebarsApplicationMixin(ApplicationV2) {
   #audioPreview = null;
 
   #settingsButton = null;
+
+  // The running upload, shown as a bar over the window: {done, total, name, run}. A render keeps showing it.
+  #progress = null;
+
+  #thumbObserver = null;
 
   constructor(options = {}) {
     super(options);
@@ -406,8 +439,11 @@ class SFCFileCommanderApp extends HandlebarsApplicationMixin(ApplicationV2) {
         type: localize("SFC.Column.Type"),
         root: localize("SFC.Pane.Home"),
         up: localize("SFC.Pane.Up"),
-        empty: localize("SFC.Pane.Empty")
+        empty: localize("SFC.Pane.Empty"),
+        webp: localize("SFC.Upload.Webp", {quality: Math.round(webpQuality() * 100)})
       },
+      webpChecked: webpEnabled(),
+      canUpload: canUploadFiles(),
       commandBar: this.#buildCommandBar(),
       status: this.#statusText(),
       panes: {
@@ -437,6 +473,15 @@ class SFCFileCommanderApp extends HandlebarsApplicationMixin(ApplicationV2) {
       entry.addEventListener("click", event => void this.#onEntryClick(event));
       entry.addEventListener("dblclick", event => void this.#onEntryDoubleClick(event));
     }
+    for ( const button of root.querySelectorAll(".sfc-view-toggle") ) button.addEventListener("click", event => void this.#onViewToggle(event));
+    for ( const pane of root.querySelectorAll(".sfc-pane") ) {
+      for ( const type of ["dragenter", "dragover"] ) pane.addEventListener(type, event => this.#onPaneDragOver(event));
+      pane.addEventListener("dragleave", event => this.#onPaneDragLeave(event));
+      pane.addEventListener("drop", event => void this.#onPaneDrop(event));
+    }
+    for ( const box of root.querySelectorAll(".sfc-webp-option input") ) box.addEventListener("change", event => void game.settings.set(MODULE_ID, WEBP_ON_UPLOAD_SETTING, event.currentTarget.checked === true));
+    this.#observeThumbnails();
+    this.#showProgress();
 
     // A render rebuilds both lists scrolled to the top, so bring the selected rows back into view.
     window.setTimeout(() => {
@@ -446,6 +491,9 @@ class SFCFileCommanderApp extends HandlebarsApplicationMixin(ApplicationV2) {
   }
 
   async close(options) {
+    this.#thumbObserver?.disconnect?.();
+    this.#thumbObserver = null;
+    if ( this.#progress?.run ) this.#progress.run.cancelled = true;
     this.#queueStateSave.cancel?.();
     await this.#saveState();
     if ( fileCommanderApp === this ) fileCommanderApp = null;
@@ -466,6 +514,7 @@ class SFCFileCommanderApp extends HandlebarsApplicationMixin(ApplicationV2) {
       { key: "F8", label: localize("SFC.Command.Delete"), disabled: true },
       { key: "Tab", label: localize("SFC.Command.Switch"), action: "switch-pane" },
       writeCommand(commandKeyLabel("Ctrl+U"), localize("SFC.Command.Upload"), "upload"),
+      writeCommand(commandKeyLabel("Ctrl+Shift+U"), localize("SFC.Command.UploadFolder"), "upload-folder"),
       { key: commandKeyLabel("Ctrl+C"), label: localize("SFC.Command.CopyPath"), action: "copy-path" }
     ];
   }
@@ -502,6 +551,7 @@ class SFCFileCommanderApp extends HandlebarsApplicationMixin(ApplicationV2) {
       bucket: pane.bucket ?? this.#defaultBucket(),
       path: normalizePath(pane.path),
       selectedPath: pane.selectedPath ?? "",
+      view: pane.view === "grid" ? "grid" : "list",
       entries: Array.isArray(pane.entries) ? pane.entries : [],
       directoryCount: 0,
       fileCount: 0,
@@ -528,7 +578,8 @@ class SFCFileCommanderApp extends HandlebarsApplicationMixin(ApplicationV2) {
       source: pane.source,
       bucket: pane.bucket,
       path: pane.path,
-      selectedPath: pane.selectedPath
+      selectedPath: pane.selectedPath,
+      view: pane.view
     };
   }
 
@@ -551,8 +602,12 @@ class SFCFileCommanderApp extends HandlebarsApplicationMixin(ApplicationV2) {
         label: value || "-",
         selected: value === pane.bucket
       })),
+      grid: pane.view === "grid",
+      viewLabel: localize(pane.view === "grid" ? "SFC.Pane.ViewList" : "SFC.Pane.ViewGrid"),
+      viewIcon: pane.view === "grid" ? "fa-list" : "fa-table-cells",
       entries: pane.entries.map(entry => ({
         ...entry,
+        ...(pane.view === "grid" ? thumbnailInfo(entry) : {}),
         cssClass: [
           entry.type === "directory" ? "is-directory" : "is-file",
           entry.path === pane.selectedPath ? "is-selected" : "",
@@ -703,6 +758,7 @@ class SFCFileCommanderApp extends HandlebarsApplicationMixin(ApplicationV2) {
       if ( action === "view" ) await this.#viewSelection();
       if ( action === "copy" ) await this.#copySelectionToOtherPane();
       if ( action === "upload" ) await this.#uploadIntoActivePane();
+      if ( action === "upload-folder" ) await this.#uploadFolderIntoActivePane();
       if ( action === "mkdir" ) await this.#createDirectoryInActivePane();
       if ( action === "copy-path" ) await this.#copySelectedPath();
       if ( action === "refresh" ) await this.#refreshPanes();
@@ -806,16 +862,25 @@ class SFCFileCommanderApp extends HandlebarsApplicationMixin(ApplicationV2) {
       return;
     }
 
+    // In a thumbnail grid the arrows walk the grid, Backspace and Enter still go up and open.
+    const grid = this.session.panes[activePane].view === "grid";
+    if ( grid && ["ArrowLeft", "ArrowRight"].includes(event.key) ) {
+      consumeKeyEvent(event);
+      this.#moveSelection(activePane, event.key === "ArrowLeft" ? -1 : 1);
+      this.#applySelectionChange();
+      return;
+    }
+
     if ( event.key === "ArrowUp" ) {
       consumeKeyEvent(event);
-      this.#moveSelection(activePane, -1);
+      this.#moveSelection(activePane, grid ? -this.#gridColumns(activePane) : -1);
       this.#applySelectionChange();
       return;
     }
 
     if ( event.key === "ArrowDown" ) {
       consumeKeyEvent(event);
-      this.#moveSelection(activePane, 1);
+      this.#moveSelection(activePane, grid ? this.#gridColumns(activePane) : 1);
       this.#applySelectionChange();
       return;
     }
@@ -921,7 +986,8 @@ class SFCFileCommanderApp extends HandlebarsApplicationMixin(ApplicationV2) {
     if ( event.key.toLowerCase() === "u" && isCommandKey(event) ) {
       consumeKeyEvent(event);
       try {
-        await this.#uploadIntoActivePane();
+        if ( event.shiftKey ) await this.#uploadFolderIntoActivePane();
+        else await this.#uploadIntoActivePane();
       } catch (error) {
         this.#notifyError(error);
       }
@@ -939,7 +1005,9 @@ class SFCFileCommanderApp extends HandlebarsApplicationMixin(ApplicationV2) {
     const entries = this.session.panes[side].entries;
     if ( !entries.length ) return;
     const currentIndex = Math.max(0, this.#getSelectedIndex(side));
-    const nextIndex = Math.min(entries.length - 1, Math.max(0, currentIndex + delta));
+    // A step by a row that would leave the grid stays where it is, like in the last row of a list.
+    const target = currentIndex + delta;
+    const nextIndex = Math.abs(delta) > 1 && (target < 0 || target > entries.length - 1) ? currentIndex : Math.min(entries.length - 1, Math.max(0, target));
     this.session.panes[side].selectedPath = entries[nextIndex].path;
   }
 
@@ -1225,27 +1293,78 @@ class SFCFileCommanderApp extends HandlebarsApplicationMixin(ApplicationV2) {
   async #uploadIntoActivePane() {
     if ( !this.#ensureUploadPermission() ) return;
     const side = this.#getActivePaneKey();
-    const pane = this.session.panes[side];
-    if ( !this.#paneSupportsWrite(pane) ) throw new Error(localize("SFC.Notification.CopyUnsupported"));
+    if ( !this.#paneSupportsWrite(this.session.panes[side]) ) throw new Error(localize("SFC.Notification.CopyUnsupported"));
 
     const files = await chooseFiles();
     if ( !files.length ) {
       ui.notifications?.info(localize("SFC.Notification.Cancelled"));
       return;
     }
+    await this.#uploadPlan(side, planFromFiles(files));
+  }
+
+  async #uploadFolderIntoActivePane() {
+    if ( !this.#ensureUploadPermission() ) return;
+    const side = this.#getActivePaneKey();
+    if ( !this.#paneSupportsWrite(this.session.panes[side]) ) throw new Error(localize("SFC.Notification.CopyUnsupported"));
+
+    const files = await chooseFiles({directory: true});
+    if ( !files.length ) {
+      ui.notifications?.info(localize("SFC.Notification.Cancelled"));
+      return;
+    }
+    await this.#uploadPlan(side, planFromFiles(files), {folder: true});
+  }
+
+  // Uploads files, creating the folders they sit in below the pane's path first. Shows the progress bar, converts
+  // images to WebP when the option is on, asks before it overwrites and reports what the server refused.
+  async #uploadPlan(side, plan, {folder = false} = {}) {
+    const pane = this.session.panes[side];
+    if ( !plan.files.length && !plan.dirs.length ) {
+      ui.notifications?.info(localize("SFC.Notification.Cancelled"));
+      return;
+    }
+    if ( this.#progress ) {
+      ui.notifications?.warn(localize("SFC.Upload.Busy"));
+      return;
+    }
 
     const body = {};
     if ( pane.source === "s3" && pane.bucket ) body.bucket = pane.bucket;
-
-    const run = createTransferRun(files.length > 1);
+    const convert = webpEnabled();
+    const quality = webpQuality();
+    const run = createTransferRun(plan.files.length > 1);
+    this.#progress = {done: 0, total: plan.files.length, name: "", run};
     let uploaded = 0;
-    for ( const file of files ) {
-      if ( run.cancelled ) break;
-      if ( !(await this.#confirmWrite(run, pane, pane.path, file.name)) ) continue;
-      if ( uploadSucceeded(await getFilePickerClass().upload(pane.source, pane.path, file, body, {notify: false})) ) uploaded += 1;
-      else run.failed += 1;
+    let converted = 0;
+    try {
+      this.#showProgress();
+      // On The Forge the upload creates missing folders itself, so a failed createDirectory must not stop it.
+      for ( const directory of plan.dirs ) {
+        await this.#ensureDirectory(pane, joinPath(pane.path, directory), {ignoreErrors: pane.source === FORGE_SOURCE});
+      }
+      for ( const item of plan.files ) {
+        if ( run.cancelled ) break;
+        this.#progress.name = item.file.name;
+        this.#showProgress();
+        let file = item.file;
+        if ( convert ) file = await convertToWebp(file, quality);
+        const directory = joinPath(pane.path, item.dir);
+        if ( (await this.#confirmWrite(run, pane, directory, file.name)) ) {
+          if ( uploadSucceeded(await getFilePickerClass().upload(pane.source, directory, file, body, {notify: false})) ) {
+            uploaded += 1;
+            if ( file !== item.file ) converted += 1;
+          } else run.failed += 1;
+        }
+        this.#progress.done += 1;
+      }
+    } finally {
+      this.#progress = null;
+      this.#showProgress();
     }
     if ( uploaded ) countFeature(MODULE_ID, "filesUploaded");
+    if ( folder && (uploaded || plan.dirs.length) ) countFeature(MODULE_ID, "folderUploaded");
+    if ( converted ) countFeature(MODULE_ID, "webpOnUpload");
 
     await this.#browsePane(side, pane.path, {keepSelection: true});
     if ( uploaded || !run.failed ) {
@@ -1255,6 +1374,121 @@ class SFCFileCommanderApp extends HandlebarsApplicationMixin(ApplicationV2) {
     if ( run.failed ) ui.notifications?.warn(localize("SFC.Notification.UploadFailed", {count: run.failed}));
     this.#notifySkipped(run);
     this.render();
+  }
+
+  // The progress bar sits in the window while an upload runs and goes away when it ends. Shown again after every render.
+  #showProgress() {
+    const app = this.element?.querySelector?.(".sfc-app");
+    if ( !app ) return;
+    let bar = app.querySelector?.(".sfc-progress") ?? null;
+    const progress = this.#progress;
+    if ( !progress ) {
+      bar?.remove?.();
+      return;
+    }
+    if ( !bar && typeof app.insertAdjacentHTML === "function" ) {
+      app.insertAdjacentHTML("beforeend", `<div class="sfc-progress" role="status">
+        <span class="sfc-progress-text"></span>
+        <progress class="sfc-progress-bar" max="1" value="0"></progress>
+        <button type="button" class="sfc-progress-cancel"></button>
+      </div>`);
+      bar = app.querySelector(".sfc-progress");
+      bar?.querySelector(".sfc-progress-cancel")?.addEventListener("click", () => {
+        progress.run.cancelled = true;
+        this.#showProgress();
+      });
+    }
+    if ( !bar ) return;
+    const text = progress.run.cancelled
+      ? localize("SFC.Upload.Cancelling")
+      : localize("SFC.Upload.Progress", {done: progress.done, total: progress.total, name: progress.name || "..."});
+    const textElement = bar.querySelector(".sfc-progress-text");
+    if ( textElement ) textElement.textContent = text;
+    const meter = bar.querySelector(".sfc-progress-bar");
+    if ( meter ) meter.value = progress.total ? progress.done / progress.total : 0;
+    const cancel = bar.querySelector(".sfc-progress-cancel");
+    if ( cancel ) {
+      cancel.textContent = localize("SFC.Dialog.Overwrite.Cancel");
+      cancel.disabled = progress.run.cancelled;
+    }
+  }
+
+  async #onViewToggle(event) {
+    event.preventDefault();
+    const side = event.currentTarget.dataset.pane;
+    const pane = this.session.panes[side];
+    if ( !pane ) return;
+    pane.view = pane.view === "grid" ? "list" : "grid";
+    if ( pane.view === "grid" ) countFeature(MODULE_ID, "gridView");
+    this.session.activePane = side;
+    await this.#saveState();
+    this.render();
+  }
+
+  // The number of thumbnails in one row of a grid, read from the rendered rows.
+  #gridColumns(side) {
+    const rows = Array.from(this.element?.querySelectorAll?.(`.sfc-pane[data-pane='${side}'] .sfc-entry`) ?? []);
+    if ( !rows.length ) return 1;
+    const top = rows[0].offsetTop;
+    const count = rows.findIndex(row => row.offsetTop !== top);
+    return Math.max(1, count < 0 ? rows.length : count);
+  }
+
+  // Thumbnails load when they come into view: a folder of hundreds of images fetches only what is on screen.
+  #observeThumbnails() {
+    this.#thumbObserver?.disconnect?.();
+    this.#thumbObserver = null;
+    const thumbs = Array.from(this.element?.querySelectorAll?.(".sfc-thumb [data-src]") ?? []);
+    if ( !thumbs.length ) return;
+    const load = element => {
+      element.setAttribute("src", element.dataset.src);
+      delete element.dataset.src;
+    };
+    if ( typeof IntersectionObserver !== "function" ) return thumbs.forEach(load);
+    this.#thumbObserver = new IntersectionObserver(items => {
+      for ( const item of items ) {
+        if ( !item.isIntersecting ) continue;
+        this.#thumbObserver?.unobserve(item.target);
+        if ( item.target.dataset.src ) load(item.target);
+      }
+    }, {root: null, rootMargin: "200px"});
+    for ( const element of thumbs ) this.#thumbObserver.observe(element);
+  }
+
+  #onPaneDragOver(event) {
+    if ( !hasFiles(event.dataTransfer) ) return;
+    event.preventDefault();
+    if ( event.dataTransfer ) event.dataTransfer.dropEffect = "copy";
+    event.currentTarget.classList?.add("is-dropping");
+  }
+
+  #onPaneDragLeave(event) {
+    const pane = event.currentTarget;
+    // Moving over a child fires dragleave on the pane too: only leaving the pane counts.
+    if ( event.relatedTarget && pane.contains?.(event.relatedTarget) ) return;
+    pane.classList?.remove("is-dropping");
+  }
+
+  // Files and whole folders from the operating system land in the pane they are dropped on.
+  async #onPaneDrop(event) {
+    if ( !hasFiles(event.dataTransfer) ) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const pane = event.currentTarget;
+    pane.classList?.remove("is-dropping");
+    const side = pane.dataset.pane;
+    if ( side !== "left" && side !== "right" ) return;
+    this.session.activePane = side;
+
+    try {
+      if ( !this.#ensureUploadPermission() ) return;
+      if ( !this.#paneSupportsWrite(this.session.panes[side]) ) throw new Error(localize("SFC.Notification.CopyUnsupported"));
+      // planFromDrop reads the dropped items before its first await, the browser empties them afterwards.
+      const plan = await planFromDrop(event.dataTransfer);
+      await this.#uploadPlan(side, plan, {folder: plan.dirs.length > 0});
+    } catch (error) {
+      this.#notifyError(error);
+    }
   }
 
   #notifyError(error) {
@@ -1530,11 +1764,12 @@ async function askOverwrite(name, directory, multiple) {
   });
 }
 
-async function chooseFiles() {
+async function chooseFiles({directory = false} = {}) {
   return new Promise(resolve => {
     const input = document.createElement("input");
     input.type = "file";
     input.multiple = true;
+    if ( directory ) input.webkitdirectory = true;
     let resolved = false;
     const finish = files => {
       if ( resolved ) return;
@@ -1550,6 +1785,144 @@ async function chooseFiles() {
     window.addEventListener("focus", onFocus, true);
     input.click();
   });
+}
+
+// ---- Folder upload, WebP conversion and drops
+
+function webpEnabled() {
+  return getRegisteredSettingValue(WEBP_ON_UPLOAD_SETTING, false) === true;
+}
+
+function webpQuality() {
+  const value = Number(getRegisteredSettingValue(WEBP_QUALITY_SETTING, DEFAULT_WEBP_QUALITY));
+  return Number.isFinite(value) && value > 0 ? Math.min(1, Math.max(0.5, value)) : DEFAULT_WEBP_QUALITY;
+}
+
+// The setting changed (from the settings dialog): the open commander shows the new state.
+function refreshWebpOption() {
+  if ( fileCommanderApp?.rendered ) void fileCommanderApp.render();
+}
+
+function isJunkFileName(name) {
+  return JUNK_FILE_NAMES.has(String(name ?? "").toLowerCase());
+}
+
+function webpCandidate(name) {
+  return WEBP_SOURCE_EXTENSIONS.has(fileExtension(String(name ?? "")));
+}
+
+function webpFileName(name) {
+  const text = String(name ?? "");
+  const index = text.lastIndexOf(".");
+  return `${index > 0 ? text.slice(0, index) : text}.webp`;
+}
+
+// An animated PNG has an acTL chunk before its image data. The canvas would keep only the first frame.
+function isAnimatedPng(bytes) {
+  const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  if ( view.length < 12 || view[1] !== 0x50 || view[2] !== 0x4E || view[3] !== 0x47 ) return false;
+  const name = offset => String.fromCharCode(view[offset], view[offset + 1], view[offset + 2], view[offset + 3]);
+  let offset = 8;
+  while ( offset + 8 <= view.length ) {
+    const length = ((view[offset] << 24) | (view[offset + 1] << 16) | (view[offset + 2] << 8) | view[offset + 3]) >>> 0;
+    const type = name(offset + 4);
+    if ( type === "acTL" ) return true;
+    if ( type === "IDAT" || type === "IEND" ) return false;
+    offset += 12 + length;
+  }
+  return false;
+}
+
+// Resolves to the original file when it should stay as it is (other types, animated PNG, no WebP support in the
+// browser, any failure), else to a new file with the ending .webp.
+async function convertToWebp(file, quality = DEFAULT_WEBP_QUALITY) {
+  if ( !webpCandidate(file?.name) ) return file;
+  try {
+    if ( fileExtension(file.name) === "png" && isAnimatedPng(new Uint8Array(await file.arrayBuffer())) ) return file;
+    const bitmap = await createImageBitmap(file);
+    const canvas = document.createElement("canvas");
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    canvas.getContext("2d").drawImage(bitmap, 0, 0);
+    bitmap.close?.();
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/webp", quality));
+    canvas.width = canvas.height = 0;
+    if ( !blob || blob.type !== "image/webp" ) return file;
+    return new File([blob], webpFileName(file.name), {type: "image/webp", lastModified: file.lastModified});
+  } catch ( error ) {
+    console.warn(`${MODULE_ID} | could not convert '${file?.name}' to WebP`, error);
+    return file;
+  }
+}
+
+// All folders of a plan, each with its parents, shortest first, so that createDirectory always finds its parent.
+function expandDirectories(paths) {
+  const all = new Set();
+  for ( const path of paths ) {
+    const parts = normalizePath(path).split("/").filter(Boolean);
+    for ( let index = 1; index <= parts.length; index++ ) all.add(parts.slice(0, index).join("/"));
+  }
+  return Array.from(all).sort((a, b) => a.split("/").length - b.split("/").length || a.localeCompare(b));
+}
+
+// What to upload: files with the folder they sit in (relative to the target), and the folders to create.
+function buildPlan(files, directories = []) {
+  const kept = files.filter(item => !isJunkFileName(item.file?.name));
+  return {files: kept, dirs: expandDirectories([...directories, ...kept.map(item => item.dir)])};
+}
+
+// Files of a file chooser: a folder choice names every file's path from the chosen folder on (webkitRelativePath).
+function planFromFiles(files) {
+  return buildPlan(Array.from(files ?? []).map(file => {
+    const relative = normalizePath(file.webkitRelativePath ?? "");
+    return {file, dir: relative ? parentPath(relative) : ""};
+  }));
+}
+
+function hasFiles(dataTransfer) {
+  return Array.from(dataTransfer?.types ?? []).includes("Files");
+}
+
+async function readDirectoryEntries(entry) {
+  const reader = entry.createReader();
+  const all = [];
+  // readEntries hands out its entries in batches, until it returns an empty one.
+  for ( ;; ) {
+    const batch = await new Promise((resolve, reject) => reader.readEntries(resolve, reject));
+    if ( !batch.length ) return all;
+    all.push(...batch);
+  }
+}
+
+async function walkEntry(entry, directory, found) {
+  if ( entry.isFile ) {
+    const file = await new Promise((resolve, reject) => entry.file(resolve, reject));
+    found.files.push({file, dir: directory});
+    return;
+  }
+  if ( !entry.isDirectory ) return;
+  const next = joinPath(directory, entry.name);
+  found.dirs.push(next);
+  for ( const child of await readDirectoryEntries(entry) ) await walkEntry(child, next, found);
+}
+
+// A drop from the operating system: files go in directly, a folder keeps its name and its subfolders.
+async function planFromDrop(dataTransfer) {
+  const items = Array.from(dataTransfer?.items ?? []).filter(item => item.kind === "file");
+  const entries = items.map(item => item.webkitGetAsEntry?.() ?? null);
+  if ( !entries.length || entries.some(entry => !entry) ) return planFromFiles(Array.from(dataTransfer?.files ?? []));
+  const found = {files: [], dirs: []};
+  for ( const entry of entries ) await walkEntry(entry, "", found);
+  return buildPlan(found.files, found.dirs);
+}
+
+// What a grid cell shows: the picture or the first frame of the video, loaded when it scrolls into view, else an icon.
+function thumbnailInfo(entry) {
+  if ( entry.type === "directory" ) return {isImage: false, isVideo: false, icon: entry.isParent ? "fa-turn-up" : "fa-folder"};
+  const kind = mediaKind(entry.name);
+  if ( kind === "image" ) return {isImage: true, isVideo: false, thumbUrl: toFetchUrl(entry.path)};
+  if ( kind === "video" ) return {isImage: false, isVideo: true, thumbUrl: `${toFetchUrl(entry.path)}#t=0.1`};
+  return {isImage: false, isVideo: false, icon: kind === "audio" ? "fa-file-audio" : "fa-file"};
 }
 
 // Whether the current user finds settings of this module in the settings dialog.
@@ -1712,6 +2085,18 @@ export const __test__ = {
   applyOverwriteAnswer,
   askOverwrite,
   chooseFiles,
+  webpEnabled,
+  webpQuality,
+  isJunkFileName,
+  webpCandidate,
+  webpFileName,
+  isAnimatedPng,
+  convertToWebp,
+  expandDirectories,
+  buildPlan,
+  planFromFiles,
+  planFromDrop,
+  thumbnailInfo,
   hasOwnSettings,
   openModuleSettings,
   runSelfTest,

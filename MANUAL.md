@@ -11,6 +11,9 @@ This manual covers the details. For a quick overview see the [README](README.md)
 * Reports files the server did not store (for example a file type Foundry does not accept) with a warning at the end of the copy or upload, instead of claiming success
 * Folder creation in writable storages
 * Local upload into the active panel
+* Folder upload (`Ctrl+Shift+U` or the *Folder Upload* button) and drag and drop of files and whole folders from the operating system onto a panel. Subfolders keep their structure and are created as needed, empty folders dropped from the desktop too. A bar shows how many files are done, the current file and a *Cancel* button, which stops after the current file. Files that the operating system leaves in folders (`.DS_Store`, `Thumbs.db`, `desktop.ini`) are skipped
+* Optional conversion of images to WebP while uploading, see [WebP on upload](#webp-on-upload)
+* A thumbnail grid for each panel, see [Thumbnail grid](#thumbnail-grid)
 * Images and videos open in Foundry's image viewer, audio files play in a small player
 * `Ctrl+C` copies the path of the selected entry in the form Foundry's file picker uses: a relative path for User Data and Public, the full URL for S3 and The Forge. Paste it into token images, tiles or playlist sounds
 * A status line shows the path of the selected entry
@@ -29,11 +32,20 @@ This manual covers the details. For a quick overview see the [README](README.md)
 * `F5` copies the selected entry to the opposite panel
 * `F7` creates a directory in the active panel
 * `Ctrl+U` uploads files into the active panel
-* On a Mac `Cmd+C`, `Cmd+R` and `Cmd+U` work like the Ctrl keys (the function bar then shows Cmd, Ctrl keeps working)
+* `Ctrl+Shift+U` uploads a whole folder into the active panel
+* On a Mac `Cmd+C`, `Cmd+R`, `Cmd+U` and `Cmd+Shift+U` work like the Ctrl keys (the function bar then shows Cmd, Ctrl keeps working)
+
+## WebP on upload
+
+The checkbox *Convert images to WebP on upload* below the panels (or the setting of the same name) converts PNG, JPG and BMP images to WebP while they are uploaded: single files, folders and dropped files alike. The file keeps its name with the ending `.webp`. GIF, animated PNG, SVG, videos and everything that is not a raster image stay as they are, and so does a file the browser cannot convert. *WebP quality* in the settings sets the detail kept, from 0.5 to 1, default 0.85. Copying with `F5` never converts. Converting happens in your browser, one file at a time, so very large maps take a moment.
+
+## Thumbnail grid
+
+The button next to the source of each panel switches that panel between the list and a grid of thumbnails. Images and videos show a small picture (a video its first frame), folders, audio and other files an icon. Thumbnails load only when they scroll into view, so a folder with hundreds of images stays quick. Selection, double click, copy, path copy and view work as in the list. In the grid `ArrowLeft` and `ArrowRight` move by one entry, `ArrowUp` and `ArrowDown` by a row, `Backspace` still goes to the parent folder and `Enter` opens. The choice is kept per panel with *Restore last session*.
 
 ## Permissions
 
-Opening the commander needs the Foundry permission to browse files. Copy, upload and new folders also need the permission to upload files. Without it these commands are shown disabled.
+Opening the commander needs the Foundry permission to browse files. Copy, upload (also folders and drops) and new folders also need the permission to upload files. Without it these commands are shown disabled.
 
 ## Settings
 
@@ -64,8 +76,8 @@ The module can take part in a small usage report shared by all of Sephral’s mo
 With the GM’s consent only the active GM’s browser counts, and it sends at most one report a day. The counts are kept in a hidden world setting, so all browsers and computers of the GM count together, and turning the statistics off deletes them. A copy of a world gets its own world ID. The question lists everything the report contains, from the Foundry version to a random world ID. For the File Commander it holds:
 
 * on how many of the last 30 days the module was used
-* how often files are opened, paths are copied, files or folders are copied to the other pane, folders are created, files are uploaded, the Commander key commands are used and the self test runs
-* the settings *Show scene control button*, *Restore last session* and *Default left source* (only the chosen option)
+* how often files are opened, paths are copied, files or folders are copied to the other pane, folders are created, files are uploaded, whole folders are uploaded, images are converted to WebP on upload, a panel is switched to the thumbnail grid, the Commander key commands are used and the self test runs
+* the settings *Show scene control button*, *Restore last session*, *Default left source* and *Convert images to WebP on upload* (only the chosen option)
 * where errors occur in the module code: file, line, error type and whether the error arose in the module itself, in Foundry, in the game system or in another module, never the error message or the name of another module
 
 No names, chat messages, notes, dice results or other content of the world are sent.

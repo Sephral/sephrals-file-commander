@@ -13,7 +13,8 @@
 * **Two panels, one view:** browse two folders side by side, for example your asset collection on the left and your world on the right.
 * **Copy whole folders:** copy single files or complete folder trees from one panel to the other. Before anything gets overwritten, it asks.
 * **Keyboard first:** arrow keys, Enter, Tab and the classic F keys. F3 views, F5 copies, F7 creates a folder.
-* **Upload where you are:** upload files from your computer straight into the active panel.
+* **Upload where you are:** upload files or whole folders from your computer straight into the active panel, drag them in from the desktop, and let images become smaller WebP files on the way.
+* **Thumbnails:** switch a panel to a grid of thumbnails for images and videos.
 * **Look before you use:** images and videos open in Foundry's image viewer, audio files play in a small player.
 * **Copy the path, paste it anywhere:** Ctrl+C copies the path the way Foundry expects it, ready for token images, tiles or playlist sounds.
 * **Everywhere Foundry runs:** User Data, Public, S3 and the Assets Library on The Forge.

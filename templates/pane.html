@@ -26,6 +26,10 @@
         </select>
       </label>
       {{/if}}
+
+      <button type="button" class="sfc-view-toggle" data-pane="{{side}}" data-tooltip="{{pane.viewLabel}}" aria-label="{{pane.viewLabel}}" title="{{pane.viewLabel}}">
+        <i class="fa-solid {{pane.viewIcon}}"></i>
+      </button>
     </div>
 
     <form class="sfc-path-row" data-pane="{{side}}">
@@ -38,13 +42,15 @@
     {{#if pane.error}}
     <div class="sfc-pane-error">{{pane.error}}</div>
     {{else}}
+    {{#unless pane.grid}}
     <div class="sfc-columns">
       <span>{{labels.name}}</span>
       <span>{{labels.ext}}</span>
       <span>{{labels.type}}</span>
     </div>
+    {{/unless}}
 
-    <div class="sfc-entry-list">
+    <div class="sfc-entry-list {{#if pane.grid}}is-grid{{/if}}">
       {{#if pane.entries.length}}
         {{#each pane.entries}}
         <button
@@ -53,10 +59,20 @@
           data-pane="{{../side}}"
           data-path="{{path}}"
           data-entry-type="{{type}}"
+          {{#if ../pane.grid}}title="{{name}}"{{/if}}
         >
+          {{#if ../pane.grid}}
+          <span class="sfc-thumb">
+            {{#if isImage}}<img data-src="{{thumbUrl}}" alt="" decoding="async" draggable="false">
+            {{else if isVideo}}<video data-src="{{thumbUrl}}" muted preload="metadata" playsinline></video>
+            {{else}}<i class="fa-solid {{icon}}"></i>{{/if}}
+          </span>
+          <span class="sfc-entry-name">{{label}}</span>
+          {{else}}
           <span class="sfc-entry-name">{{label}}</span>
           <span class="sfc-entry-ext">{{extension}}</span>
           <span class="sfc-entry-kind">{{typeLabel}}</span>
+          {{/if}}
         </button>
         {{/each}}
       {{else}}

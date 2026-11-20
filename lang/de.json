@@ -109,5 +109,16 @@
   "SFC.Debug.Save": "Debug-Datei speichern",
   "SFC.Debug.Hint": "Speichert eine Datei für Fehlerberichte über alle Module von Sephral in dieser Welt: Versionen, Einstellungen und was die Module aufgezeichnet haben, etwa die letzten Chatnachrichten, die sie gelesen haben. Sie enthält Chattext und Flüsternachrichten, prüfe sie vor dem Teilen.",
   "SFC.Debug.Entry": "Debug-Datei speichern (Sephral’s Module)",
-  "SFC.Debug.Saved": "Debug-Datei {file} gespeichert. Sie enthält Chattext und Flüsternachrichten, prüfe sie vor dem Teilen."
+  "SFC.Debug.Saved": "Debug-Datei {file} gespeichert. Sie enthält Chattext und Flüsternachrichten, prüfe sie vor dem Teilen.",
+  "SFC.Settings.WebpOnUpload.Name": "Bilder beim Hochladen in WebP umwandeln",
+  "SFC.Settings.WebpOnUpload.Hint": "PNG, JPG und BMP werden beim Hochladen zu kleineren WebP Dateien. GIF, animierte PNG, SVG und Videos bleiben, wie sie sind. Derselbe Schalter steht unter den beiden Fenstern.",
+  "SFC.Settings.WebpQuality.Name": "WebP Qualität",
+  "SFC.Settings.WebpQuality.Hint": "Wie viele Details die Umwandlung behält, von 0,5 (kleine Dateien) bis 1 (beste Qualität). 0,85 passt für die meisten Karten und Token.",
+  "SFC.Command.UploadFolder": "Ordner Upload",
+  "SFC.Pane.ViewGrid": "Vorschaubilder zeigen",
+  "SFC.Pane.ViewList": "Liste zeigen",
+  "SFC.Upload.Webp": "Bilder beim Hochladen in WebP umwandeln (Qualität {quality} %)",
+  "SFC.Upload.Progress": "{done} von {total} Dateien fertig, jetzt: {name}",
+  "SFC.Upload.Cancelling": "Abbruch nach der aktuellen Datei ...",
+  "SFC.Upload.Busy": "Es läuft schon ein Upload."
 }

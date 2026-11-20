@@ -7,6 +7,13 @@
 
   <div class="sfc-status-line" title="{{status}}">{{status}}</div>
 
+  {{#if canUpload}}
+  <label class="sfc-webp-option">
+    <input type="checkbox" name="webp" {{#if webpChecked}}checked{{/if}}>
+    <span>{{labels.webp}}</span>
+  </label>
+  {{/if}}
+
   <footer class="sfc-function-bar">
     {{#each commandBar}}
     <button
