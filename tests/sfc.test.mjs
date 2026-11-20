@@ -267,7 +267,7 @@ test("path and labeling helpers normalize values and fall back correctly", () =>
   assert.equal(__test__.toFetchUrl("folder/file.txt"), "/route/folder/file.txt");
 });
 
-test("F8 stays a disabled placeholder on v13 and v14 and the commander never deletes files", async () => {
+test("F8 is not on the bar on v13 and v14 and the commander never deletes files", async () => {
   for ( const generation of [13, 14] ) {
     env.reset();
     env.game.release = { generation };
@@ -276,8 +276,9 @@ test("F8 stays a disabled placeholder on v13 and v14 and the commander never del
     const app = new __test__.SFCFileCommanderApp();
     const data = await app._prepareContext();
     const deleteCommand = data.commandBar.find((entry) => entry.key === "F8");
-    assert.equal(deleteCommand?.disabled, true);
-    assert.equal(deleteCommand?.action, undefined);
+    assert.equal(deleteCommand, undefined);
+    assert.equal(data.commandBar.some((entry) => entry.disabled), false);
+    assert.equal(data.commandBar.some((entry) => ["F4", "F6"].includes(entry.key)), false);
 
     const harness = createHtmlHarness();
     renderInto(app, harness);
@@ -312,10 +313,7 @@ test("opening needs the browse permission and write commands need the upload per
   assert.notEqual(app, null);
   const data = await app._prepareContext();
   const command = (key) => data.commandBar.find((entry) => entry.key === key);
-  for ( const key of ["F5", "F7", "Ctrl+U", "Ctrl+Shift+U"] ) {
-    assert.equal(command(key).disabled, true, key);
-    assert.equal(command(key).action, undefined, key);
-  }
+  for ( const key of ["F5", "F7", "Ctrl+U", "Ctrl+Shift+U"] ) assert.equal(command(key), undefined, key);
   assert.equal(command("F3").action, "view");
   assert.equal(command("Tab").action, "switch-pane");
   assert.equal(command("Ctrl+C").action, "copy-path");
@@ -343,7 +341,7 @@ test("opening needs the browse permission and write commands need the upload per
   env.state.permissions.FILES_UPLOAD = true;
   const allowed = await app._prepareContext();
   assert.equal(allowed.commandBar.find((entry) => entry.key === "F5").action, "copy");
-  assert.equal(allowed.commandBar.length, 10);
+  assert.equal(allowed.commandBar.length, 7);
   await app.close({ force: true });
 });
 

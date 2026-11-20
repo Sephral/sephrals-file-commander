@@ -500,23 +500,20 @@ class SFCFileCommanderApp extends HandlebarsApplicationMixin(ApplicationV2) {
     return super.close(options);
   }
 
+  // Only entries that work are shown. F4, F6 and F8 are not on the bar: Foundry has no client API to edit, move or
+  // delete files, so those keys do nothing. Without the upload permission the write commands are left out too.
   #buildCommandBar() {
     const canUpload = canUploadFiles();
-    const writeCommand = (key, label, action) => canUpload ? { key, label, action } : { key, label, disabled: true };
-
-    return [
+    const commands = [
       { key: "F3", label: localize("SFC.Command.View"), action: "view" },
-      { key: "F4", label: localize("SFC.Command.Edit"), disabled: true },
-      writeCommand("F5", localize("SFC.Command.Copy"), "copy"),
-      { key: "F6", label: localize("SFC.Command.Move"), disabled: true },
-      writeCommand("F7", localize("SFC.Command.Mkdir"), "mkdir"),
-      // Foundry has no client API to delete files, so F8 stays a placeholder like F4 and F6.
-      { key: "F8", label: localize("SFC.Command.Delete"), disabled: true },
+      { key: "F5", label: localize("SFC.Command.Copy"), action: "copy", write: true },
+      { key: "F7", label: localize("SFC.Command.Mkdir"), action: "mkdir", write: true },
       { key: "Tab", label: localize("SFC.Command.Switch"), action: "switch-pane" },
-      writeCommand(commandKeyLabel("Ctrl+U"), localize("SFC.Command.Upload"), "upload"),
-      writeCommand(commandKeyLabel("Ctrl+Shift+U"), localize("SFC.Command.UploadFolder"), "upload-folder"),
+      { key: commandKeyLabel("Ctrl+U"), label: localize("SFC.Command.Upload"), action: "upload", write: true },
+      { key: commandKeyLabel("Ctrl+Shift+U"), label: localize("SFC.Command.UploadFolder"), action: "upload-folder", write: true },
       { key: commandKeyLabel("Ctrl+C"), label: localize("SFC.Command.CopyPath"), action: "copy-path" }
     ];
+    return commands.filter(command => canUpload || !command.write).map(({write, ...command}) => command);
   }
 
   #statusText() {
