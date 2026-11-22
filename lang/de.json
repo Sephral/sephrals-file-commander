@@ -120,5 +120,14 @@
   "SFC.Upload.Webp": "Bilder beim Hochladen in WebP umwandeln (Qualität {quality} %)",
   "SFC.Upload.Progress": "{done} von {total} Dateien fertig, jetzt: {name}",
   "SFC.Upload.Cancelling": "Abbruch nach der aktuellen Datei ...",
-  "SFC.Upload.Busy": "Es läuft schon ein Upload."
+  "SFC.Upload.Busy": "Es läuft schon ein Upload.",
+  "SFC.Sample.Grid": "Vorschaubilder",
+  "SFC.Sample.Upload": "Upload läuft",
+  "SFC.Sample.Cancelling": "Upload wird abgebrochen",
+  "SFC.Sample.Problems": "Leerer Ordner und Fehler",
+  "SFC.Sample.ReadOnly": "Ohne Upload-Recht",
+  "SFC.Sample.OverwriteOne": "Frage: Datei gibt es schon",
+  "SFC.Sample.OverwriteMany": "Frage: Datei gibt es schon (mehrere Dateien)",
+  "SFC.Sample.NewFolder": "Frage: neuer Ordner",
+  "SFC.Sample.Audio": "Klangvorschau"
 }

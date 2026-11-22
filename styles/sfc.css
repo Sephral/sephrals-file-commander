@@ -447,3 +447,15 @@
   }
 
 }
+
+/* Sample window: the banner sits above the commander, which then takes the rest of the window instead of overflowing it */
+.sfc-window.sephral-sample .window-content {
+  display: flex;
+  flex-direction: column;
+}
+
+.sfc-window.sephral-sample .sfc-app {
+  flex: 1 1 0;
+  height: auto;
+  min-height: 0;
+}

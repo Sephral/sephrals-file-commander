@@ -1,6 +1,8 @@
 import {countFeature, markUsed, registerUsage} from "./usage.mjs";
 import {registerDebugMenu, registerDebugProvider, saveDebugFile as saveSharedDebugFile} from "./debug-file.mjs";
 import {registerHubModule} from "./hub.mjs";
+import {sampleBlocked} from "./samples.mjs";
+import {sampleWindows} from "./sample-windows.js";
 
 const MODULE_ID = "sephrals-file-commander";
 const DEFAULT_SCENE_CONTROL = "tokens";
@@ -189,7 +191,16 @@ Hooks.once("ready", () => {
     open: openFileCommander,
     runSelfTest,
     // One file for all of Sephral's modules, without a message id about their latest picture
-    saveDebugFile: messageId => saveSharedDebugFile(messageId ?? null, {moduleId: MODULE_ID})
+    saveDebugFile: messageId => saveSharedDebugFile(messageId ?? null, {moduleId: MODULE_ID}),
+    // Windows and questions filled with made up data, nothing is saved (used by the translator and for testing)
+    samples: () => sampleWindows({
+      App: SFCFileCommanderApp,
+      localize,
+      overwriteDialog,
+      newFolderContent,
+      audioContent,
+      moduleId: MODULE_ID
+    })
   };
 });
 
@@ -355,6 +366,11 @@ class SFCSelfTestMenu extends ApplicationV2 {
 }
 
 class SFCFileCommanderApp extends HandlebarsApplicationMixin(ApplicationV2) {
+  // Counts a feature unless this is a sample window.
+  #count(feature) {
+    if ( !this.isSample ) countFeature(MODULE_ID, feature);
+  }
+
   #queueStateSave = foundry.utils.debounce(() => void this.#saveState(), STATE_SAVE_DELAY);
 
   #audioPreview = null;
@@ -443,7 +459,7 @@ class SFCFileCommanderApp extends HandlebarsApplicationMixin(ApplicationV2) {
         webp: localize("SFC.Upload.Webp", {quality: Math.round(webpQuality() * 100)})
       },
       webpChecked: webpEnabled(),
-      canUpload: canUploadFiles(),
+      canUpload: this.#canUpload(),
       commandBar: this.#buildCommandBar(),
       status: this.#statusText(),
       panes: {
@@ -479,7 +495,14 @@ class SFCFileCommanderApp extends HandlebarsApplicationMixin(ApplicationV2) {
       pane.addEventListener("dragleave", event => this.#onPaneDragLeave(event));
       pane.addEventListener("drop", event => void this.#onPaneDrop(event));
     }
-    for ( const box of root.querySelectorAll(".sfc-webp-option input") ) box.addEventListener("change", event => void game.settings.set(MODULE_ID, WEBP_ON_UPLOAD_SETTING, event.currentTarget.checked === true));
+    for ( const box of root.querySelectorAll(".sfc-webp-option input") ) box.addEventListener("change", event => {
+      if ( this.isSample ) {
+        event.currentTarget.checked = webpEnabled();
+        sampleBlocked();
+        return;
+      }
+      void game.settings.set(MODULE_ID, WEBP_ON_UPLOAD_SETTING, event.currentTarget.checked === true);
+    });
     this.#observeThumbnails();
     this.#showProgress();
 
@@ -502,8 +525,17 @@ class SFCFileCommanderApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
   // Only entries that work are shown. F4, F6 and F8 are not on the bar: Foundry has no client API to edit, move or
   // delete files, so those keys do nothing. Without the upload permission the write commands are left out too.
+  #canUpload() {
+    return this.sample ? !this.sample.readOnly : canUploadFiles();
+  }
+
+  // A running upload for a sample window: the bar over the window, nothing runs behind it.
+  set sampleProgress(progress) {
+    this.#progress = progress;
+  }
+
   #buildCommandBar() {
-    const canUpload = canUploadFiles();
+    const canUpload = this.#canUpload();
     const commands = [
       { key: "F3", label: localize("SFC.Command.View"), action: "view" },
       { key: "F5", label: localize("SFC.Command.Copy"), action: "copy", write: true },
@@ -558,6 +590,7 @@ class SFCFileCommanderApp extends HandlebarsApplicationMixin(ApplicationV2) {
   }
 
   async #saveState() {
+    if ( this.isSample ) return;
     if ( !game.settings.get(MODULE_ID, RESTORE_STATE_SETTING) ) return;
     const payload = {
       activePane: this.session.activePane,
@@ -694,6 +727,7 @@ class SFCFileCommanderApp extends HandlebarsApplicationMixin(ApplicationV2) {
   }
 
   async #browseRaw(source, target, bucket) {
+    if ( this.sample ) return this.sample.browse(source, target, bucket);
     const options = {};
     if ( source === "s3" && bucket ) options.bucket = bucket;
     return getFilePickerClass().browse(source, target, options);
@@ -849,7 +883,7 @@ class SFCFileCommanderApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
     // Commands by key, not the navigation keys: shows whether the Commander keys are used.
     if ( ["F3", "F5", "F7"].includes(event.key) || (isCommandKey(event) && ["c", "r", "u"].includes(event.key?.toLowerCase())) ) {
-      countFeature(MODULE_ID, "keyCommand");
+      this.#count("keyCommand");
     }
 
     if ( event.key === "Tab" ) {
@@ -1077,7 +1111,7 @@ class SFCFileCommanderApp extends HandlebarsApplicationMixin(ApplicationV2) {
     const url = toFetchUrl(entry.path);
     const kind = mediaKind(entry.name);
     const ImagePopout = foundry.applications?.apps?.ImagePopout;
-    countFeature(MODULE_ID, "fileOpened");
+    this.#count("fileOpened");
 
     if ( (kind === "image" || kind === "video") && ImagePopout ) {
       await new ImagePopout({src: url, window: {title: entry.name}}).render({force: true});
@@ -1085,10 +1119,12 @@ class SFCFileCommanderApp extends HandlebarsApplicationMixin(ApplicationV2) {
     }
 
     if ( kind === "audio" ) {
+      if ( this.isSample ) return sampleBlocked();
       this.#playAudio(entry, url);
       return;
     }
 
+    if ( this.isSample ) return sampleBlocked();
     window.open(url, "_blank", "noopener");
   }
 
@@ -1098,7 +1134,7 @@ class SFCFileCommanderApp extends HandlebarsApplicationMixin(ApplicationV2) {
     void foundry.applications.api.DialogV2.prompt({
       window: {title: entry.name, icon: "fa-solid fa-music"},
       classes: ["sfc-audio-preview"],
-      content: `<audio controls autoplay src="${foundry.utils.escapeHTML(url)}"></audio>`,
+      content: audioContent(url, true),
       ok: {label: localize("SFC.Dialog.Audio.Close"), icon: "fa-solid fa-xmark"},
       render: (_event, dialog) => {
         this.#audioPreview = dialog;
@@ -1116,11 +1152,15 @@ class SFCFileCommanderApp extends HandlebarsApplicationMixin(ApplicationV2) {
     // The listed path is what Foundry's FilePicker writes into image and sound fields: relative for User Data
     // and Public, the full URL for S3 and The Forge.
     await copyTextToClipboard(selection.path);
-    countFeature(MODULE_ID, "pathCopied");
+    this.#count("pathCopied");
     ui.notifications?.info(localize("SFC.Notification.PathCopied", {path: selection.path}));
   }
 
   #ensureUploadPermission() {
+    if ( this.isSample ) {
+      sampleBlocked();
+      return false;
+    }
     if ( canUploadFiles() ) return true;
     ui.notifications?.warn(localize("SFC.Error.NoUploadPermission"));
     return false;
@@ -1264,12 +1304,7 @@ class SFCFileCommanderApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
     const directoryName = await foundry.applications.api.DialogV2.prompt({
       window: {title: localize("SFC.Dialog.NewFolder.Title"), icon: "fa-solid fa-folder-plus"},
-      content: `
-        <div class="form-group">
-          <label>${localize("SFC.Dialog.NewFolder.Label")}</label>
-          <input type="text" name="dirname" autofocus>
-        </div>
-      `,
+      content: newFolderContent(),
       ok: {
         label: localize("SFC.Dialog.NewFolder.Confirm"),
         callback: (_event, button) => button.form.elements.dirname.value.trim()
@@ -1416,7 +1451,7 @@ class SFCFileCommanderApp extends HandlebarsApplicationMixin(ApplicationV2) {
     const pane = this.session.panes[side];
     if ( !pane ) return;
     pane.view = pane.view === "grid" ? "list" : "grid";
-    if ( pane.view === "grid" ) countFeature(MODULE_ID, "gridView");
+    if ( pane.view === "grid" ) this.#count("gridView");
     this.session.activePane = side;
     await this.#saveState();
     this.render();
@@ -1734,7 +1769,8 @@ function applyOverwriteAnswer(run, answer) {
   return action;
 }
 
-async function askOverwrite(name, directory, multiple) {
+// The question before a file is overwritten: the DialogV2 options, also used by the sample window.
+function overwriteDialog(name, directory, multiple) {
   const escape = foundry.utils.escapeHTML;
   const message = localize("SFC.Dialog.Overwrite.Content", {name, path: directory || "/"});
   const applyAll = multiple ? `
@@ -1752,13 +1788,30 @@ async function askOverwrite(name, directory, multiple) {
     {action: "cancel", label: localize("SFC.Dialog.Overwrite.Cancel"), icon: "fa-solid fa-xmark", default: !multiple}
   ].filter(Boolean);
 
-  return foundry.applications.api.DialogV2.wait({
+  return {
     window: {title: localize("SFC.Dialog.Overwrite.Title"), icon: "fa-solid fa-triangle-exclamation"},
     position: {width: 440},
     content: `<p>${escape(message)}</p>${applyAll}`,
     buttons,
     rejectClose: false
-  });
+  };
+}
+
+function newFolderContent() {
+  return `
+        <div class="form-group">
+          <label>${localize("SFC.Dialog.NewFolder.Label")}</label>
+          <input type="text" name="dirname" autofocus>
+        </div>
+      `;
+}
+
+function audioContent(url, autoplay) {
+  return `<audio controls ${autoplay ? "autoplay " : ""}src="${foundry.utils.escapeHTML(url)}"></audio>`;
+}
+
+async function askOverwrite(name, directory, multiple) {
+  return foundry.applications.api.DialogV2.wait(overwriteDialog(name, directory, multiple));
 }
 
 async function chooseFiles({directory = false} = {}) {

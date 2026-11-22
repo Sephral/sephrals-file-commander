@@ -120,5 +120,14 @@
   "SFC.Upload.Webp": "Convert images to WebP on upload (quality {quality} %)",
   "SFC.Upload.Progress": "{done} of {total} files done, now: {name}",
   "SFC.Upload.Cancelling": "Cancelling after the current file ...",
-  "SFC.Upload.Busy": "An upload is already running."
+  "SFC.Upload.Busy": "An upload is already running.",
+  "SFC.Sample.Grid": "Thumbnail grid",
+  "SFC.Sample.Upload": "Upload running",
+  "SFC.Sample.Cancelling": "Upload cancelling",
+  "SFC.Sample.Problems": "Empty folder and error",
+  "SFC.Sample.ReadOnly": "Without upload right",
+  "SFC.Sample.OverwriteOne": "Question: file exists",
+  "SFC.Sample.OverwriteMany": "Question: file exists (several files)",
+  "SFC.Sample.NewFolder": "Question: new folder",
+  "SFC.Sample.Audio": "Sound preview"
 }

@@ -88,7 +88,7 @@ On [The Forge](https://forge-vtt.com/) the commander adds your Assets Library to
 
 ## Macros
 
-`game.modules.get("sephrals-file-commander").api` offers `open()`, which opens the commander, `runSelfTest()`, which runs the self test (GM), and `saveDebugFile()`, which saves the [debug file](#debug-file) (GM).
+`game.modules.get("sephrals-file-commander").api` offers `open()`, which opens the commander, `runSelfTest()`, which runs the self test (GM), and `saveDebugFile()`, which saves the [debug file](#debug-file) (GM), and `samples()`, which lists sample windows and questions for the thumbnail grid, a running upload, empty and failing panes, the commander without upload right and the overwrite, new folder and sound questions. They show made-up folders, nothing is browsed, uploaded or saved. Sephral’s Translator lists them so translators see every text in its place.
 
 ## Intentional limits
 
